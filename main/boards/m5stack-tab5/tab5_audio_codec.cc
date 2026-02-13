@@ -188,6 +188,9 @@ void Tab5AudioCodec::SetOutputVolume(int volume) {
 }
 
 void Tab5AudioCodec::EnableInput(bool enable) {
+    if (reconfiguring_) {
+        return;  // Block during sample rate reconfiguration
+    }
     if (enable == input_enabled_) {
         return;
     }
@@ -211,6 +214,9 @@ void Tab5AudioCodec::EnableInput(bool enable) {
 }
 
 void Tab5AudioCodec::EnableOutput(bool enable) {
+    if (reconfiguring_) {
+        return;  // Block during sample rate reconfiguration
+    }
     if (enable == output_enabled_) {
         return;
     }
@@ -252,11 +258,15 @@ bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
 
     ESP_LOGI(TAG, "Changing output sample rate from %d to %d Hz", output_sample_rate_, sample_rate);
 
+    // Block other tasks from re-enabling devices during reconfiguration
+    reconfiguring_ = true;
+
     // Remember which codec devices were enabled so we can restore them
     bool was_output_enabled = output_enabled_;
     bool was_input_enabled = input_enabled_;
 
-    // Close both codec devices before reconfiguring I2S
+    // Close both codec devices first - order matters: close input last since
+    // I2S_IF layer needs input closed before TX can fully release in duplex mode
     if (was_output_enabled) {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
         output_enabled_ = false;
@@ -266,45 +276,12 @@ bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
         input_enabled_ = false;
     }
 
-    // Disable BOTH TX and RX channels before reconfiguring (duplex mode shares clock)
-    // The codec close may have already disabled them, so ignore ESP_ERR_INVALID_STATE
-    esp_err_t err = i2s_channel_disable(tx_handle_);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_ERROR_CHECK(err);
-    }
-    err = i2s_channel_disable(rx_handle_);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_ERROR_CHECK(err);
-    }
-
-    // Reconfigure the I2S TX (STD mode) clock
-    i2s_std_clk_config_t std_clk_cfg = {
-        .sample_rate_hz = (uint32_t)sample_rate,
-        .clk_src = I2S_CLK_SRC_DEFAULT,
-        .ext_clk_freq_hz = 0,
-        .mclk_multiple = I2S_MCLK_MULTIPLE_256
-    };
-    ESP_ERROR_CHECK(i2s_channel_reconfig_std_clock(tx_handle_, &std_clk_cfg));
-
-    // Reconfigure the I2S RX (TDM mode) clock to match TX
-    i2s_tdm_clk_config_t tdm_clk_cfg = {
-        .sample_rate_hz = (uint32_t)sample_rate,
-        .clk_src = I2S_CLK_SRC_DEFAULT,
-        .ext_clk_freq_hz = 0,
-        .mclk_multiple = I2S_MCLK_MULTIPLE_256,
-        .bclk_div = 8,
-    };
-    ESP_ERROR_CHECK(i2s_channel_reconfig_tdm_clock(rx_handle_, &tdm_clk_cfg));
-
-    // Re-enable both I2S channels
-    ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
-    ESP_ERROR_CHECK(i2s_channel_enable(rx_handle_));
-
     // Update both sample rates (duplex requires them to match)
     output_sample_rate_ = sample_rate;
     input_sample_rate_ = sample_rate;
 
-    // Reopen the input codec device if it was open before
+    // Reopen the input codec device first (RX) if it was open before
+    // Opening with the new sample rate will reconfigure I2S through I2S_IF
     if (was_input_enabled) {
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
@@ -321,7 +298,7 @@ bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
         input_enabled_ = true;
     }
 
-    // Reopen the output codec device if it was open before
+    // Reopen the output codec device (TX) if it was open before
     if (was_output_enabled) {
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
@@ -334,6 +311,9 @@ bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
         ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
         output_enabled_ = true;
     }
+
+    // Allow other tasks to enable/disable again
+    reconfiguring_ = false;
 
     ESP_LOGI(TAG, "Sample rate changed to %d Hz (both TX and RX)", output_sample_rate_);
     return true;
