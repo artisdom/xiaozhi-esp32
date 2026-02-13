@@ -230,7 +230,45 @@ void ImageViewer::Init(lv_obj_t* parent) {
     image_obj_ = lv_image_create(content_area_);
     lv_obj_center(image_obj_);
     
-    ESP_LOGI(TAG, "ImageViewer initialized");
+    // Enable gesture detection on content area
+    lv_obj_add_flag(content_area_, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(content_area_, OnSwipeEvent, LV_EVENT_GESTURE, this);
+    
+    // Previous button (left side)
+    prev_btn_ = lv_btn_create(container_);
+    lv_obj_set_size(prev_btn_, 50, 80);
+    lv_obj_align(prev_btn_, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_set_style_bg_color(prev_btn_, lv_color_hex(0x0f3460), 0);
+    lv_obj_set_style_bg_opa(prev_btn_, LV_OPA_70, 0);
+    lv_obj_set_style_radius(prev_btn_, 8, 0);
+    lv_obj_add_event_cb(prev_btn_, OnPrevButtonClicked, LV_EVENT_CLICKED, this);
+    
+    lv_obj_t* prev_label = lv_label_create(prev_btn_);
+    lv_label_set_text(prev_label, LV_SYMBOL_LEFT);
+    lv_obj_center(prev_label);
+    lv_obj_set_style_text_color(prev_label, lv_color_white(), 0);
+    
+    // Next button (right side)
+    next_btn_ = lv_btn_create(container_);
+    lv_obj_set_size(next_btn_, 50, 80);
+    lv_obj_align(next_btn_, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_set_style_bg_color(next_btn_, lv_color_hex(0x0f3460), 0);
+    lv_obj_set_style_bg_opa(next_btn_, LV_OPA_70, 0);
+    lv_obj_set_style_radius(next_btn_, 8, 0);
+    lv_obj_add_event_cb(next_btn_, OnNextButtonClicked, LV_EVENT_CLICKED, this);
+    
+    lv_obj_t* next_label = lv_label_create(next_btn_);
+    lv_label_set_text(next_label, LV_SYMBOL_RIGHT);
+    lv_obj_center(next_label);
+    lv_obj_set_style_text_color(next_label, lv_color_white(), 0);
+    
+    // Navigation counter label (e.g., "3/10")
+    nav_label_ = lv_label_create(title_bar_);
+    lv_obj_align(nav_label_, LV_ALIGN_RIGHT_MID, -60, 0);
+    lv_obj_set_style_text_color(nav_label_, lv_color_hex(0xaaaaaa), 0);
+    lv_label_set_text(nav_label_, "");
+    
+    ESP_LOGI(TAG, "ImageViewer initialized with swipe support");
 }
 
 void ImageViewer::FreeImageData() {
@@ -367,19 +405,123 @@ bool ImageViewer::Open(const std::string& path) {
     ShowError("Image viewing not supported\non this platform");
 #endif
     
+    // Find current index in image list
+    current_index_ = -1;
+    for (size_t i = 0; i < image_list_.size(); i++) {
+        if (image_list_[i] == path) {
+            current_index_ = (int)i;
+            break;
+        }
+    }
+    UpdateNavUI();
+    
     // Show viewer
     lv_obj_clear_flag(container_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(container_);
     is_visible_ = true;
     
-    ESP_LOGI(TAG, "Opened image: %s", path.c_str());
+    ESP_LOGI(TAG, "Opened image: %s (%d/%zu)", path.c_str(), current_index_ + 1, image_list_.size());
     return true;
 }
 
 void ImageViewer::Close() {
     FreeImageData();
     lv_image_set_src(image_obj_, NULL);
+    image_list_.clear();
+    current_index_ = -1;
     FileViewer::Close();
+}
+
+void ImageViewer::SetImageList(const std::vector<std::string>& images) {
+    image_list_ = images;
+    current_index_ = -1;
+    UpdateNavUI();
+}
+
+void ImageViewer::NavigatePrev() {
+    if (image_list_.empty() || current_index_ <= 0) {
+        return;
+    }
+    
+    int new_index = current_index_ - 1;
+    const std::string& new_path = image_list_[new_index];
+    
+    if (navigate_callback_) {
+        navigate_callback_(new_path);
+    } else {
+        Open(new_path);
+    }
+}
+
+void ImageViewer::NavigateNext() {
+    if (image_list_.empty() || current_index_ < 0 || 
+        current_index_ >= (int)image_list_.size() - 1) {
+        return;
+    }
+    
+    int new_index = current_index_ + 1;
+    const std::string& new_path = image_list_[new_index];
+    
+    if (navigate_callback_) {
+        navigate_callback_(new_path);
+    } else {
+        Open(new_path);
+    }
+}
+
+void ImageViewer::UpdateNavUI() {
+    bool has_list = !image_list_.empty() && current_index_ >= 0;
+    
+    // Update navigation buttons visibility
+    if (prev_btn_) {
+        if (has_list && current_index_ > 0) {
+            lv_obj_clear_flag(prev_btn_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(prev_btn_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    
+    if (next_btn_) {
+        if (has_list && current_index_ < (int)image_list_.size() - 1) {
+            lv_obj_clear_flag(next_btn_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(next_btn_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    
+    // Update counter label
+    if (nav_label_) {
+        if (has_list && image_list_.size() > 1) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%d/%zu", current_index_ + 1, image_list_.size());
+            lv_label_set_text(nav_label_, buf);
+        } else {
+            lv_label_set_text(nav_label_, "");
+        }
+    }
+}
+
+void ImageViewer::OnSwipeEvent(lv_event_t* e) {
+    ImageViewer* viewer = static_cast<ImageViewer*>(lv_event_get_user_data(e));
+    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
+    
+    if (dir == LV_DIR_LEFT) {
+        // Swipe left -> next image
+        viewer->NavigateNext();
+    } else if (dir == LV_DIR_RIGHT) {
+        // Swipe right -> previous image
+        viewer->NavigatePrev();
+    }
+}
+
+void ImageViewer::OnPrevButtonClicked(lv_event_t* e) {
+    ImageViewer* viewer = static_cast<ImageViewer*>(lv_event_get_user_data(e));
+    viewer->NavigatePrev();
+}
+
+void ImageViewer::OnNextButtonClicked(lv_event_t* e) {
+    ImageViewer* viewer = static_cast<ImageViewer*>(lv_event_get_user_data(e));
+    viewer->NavigateNext();
 }
 
 //=============================================================================

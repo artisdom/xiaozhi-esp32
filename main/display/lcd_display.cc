@@ -6,6 +6,7 @@
 
 #include <vector>
 #include <algorithm>
+#include <dirent.h>
 #include <font_awesome.h>
 #include <esp_log.h>
 #include <esp_err.h>
@@ -1355,9 +1356,33 @@ void LcdDisplay::OnFileBrowserFileSelected(const std::string& path, int file_typ
         case FileType::CSV:
             text_viewer_->Open(path);
             break;
-        case FileType::IMAGE:
+        case FileType::IMAGE: {
+            // Build list of images in the same directory for navigation
+            std::string dir_path = path.substr(0, path.rfind('/'));
+            std::vector<std::string> image_list;
+            
+            DIR* dir = opendir(dir_path.c_str());
+            if (dir) {
+                struct dirent* ent;
+                while ((ent = readdir(dir)) != nullptr) {
+                    if (ent->d_type != DT_DIR) {
+                        std::string name = ent->d_name;
+                        FileType ft = FileBrowser::GetFileType(name);
+                        if (ft == FileType::IMAGE) {
+                            image_list.push_back(dir_path + "/" + name);
+                        }
+                    }
+                }
+                closedir(dir);
+                
+                // Sort alphabetically
+                std::sort(image_list.begin(), image_list.end());
+            }
+            
+            image_viewer_->SetImageList(image_list);
             image_viewer_->Open(path);
             break;
+        }
         case FileType::AUDIO:
             audio_player_->Open(path);
             break;

@@ -3,6 +3,7 @@
 
 #include <lvgl.h>
 #include <string>
+#include <vector>
 #include <functional>
 
 /**
@@ -80,10 +81,12 @@ private:
 };
 
 /**
- * @brief Image viewer with zoom and pan support
+ * @brief Image viewer with swipe navigation support
  */
 class ImageViewer : public FileViewer {
 public:
+    using NavigateCallback = std::function<void(const std::string& path)>;
+
     ImageViewer();
     virtual ~ImageViewer();
 
@@ -91,14 +94,42 @@ public:
     bool Open(const std::string& path) override;
     void Close() override;
 
+    /**
+     * @brief Set list of images for navigation
+     * @param images List of image paths in the same directory
+     */
+    void SetImageList(const std::vector<std::string>& images);
+
+    /**
+     * @brief Set callback for when navigating to a new image
+     */
+    void SetNavigateCallback(NavigateCallback callback) {
+        navigate_callback_ = callback;
+    }
+
 private:
     lv_obj_t* image_obj_ = nullptr;
     lv_obj_t* error_label_ = nullptr;
+    lv_obj_t* prev_btn_ = nullptr;
+    lv_obj_t* next_btn_ = nullptr;
+    lv_obj_t* nav_label_ = nullptr;  // Shows "3/10" style counter
     uint8_t* image_data_ = nullptr;
     lv_image_dsc_t image_dsc_ = {};
     
+    // Navigation state
+    std::vector<std::string> image_list_;
+    int current_index_ = -1;
+    NavigateCallback navigate_callback_;
+    
     void FreeImageData();
     void ShowError(const char* message);
+    void NavigatePrev();
+    void NavigateNext();
+    void UpdateNavUI();
+    
+    static void OnSwipeEvent(lv_event_t* e);
+    static void OnPrevButtonClicked(lv_event_t* e);
+    static void OnNextButtonClicked(lv_event_t* e);
 };
 
 /**
