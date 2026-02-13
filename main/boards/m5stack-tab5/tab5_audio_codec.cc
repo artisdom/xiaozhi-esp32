@@ -267,8 +267,15 @@ bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
     }
 
     // Disable BOTH TX and RX channels before reconfiguring (duplex mode shares clock)
-    ESP_ERROR_CHECK(i2s_channel_disable(tx_handle_));
-    ESP_ERROR_CHECK(i2s_channel_disable(rx_handle_));
+    // The codec close may have already disabled them, so ignore ESP_ERR_INVALID_STATE
+    esp_err_t err = i2s_channel_disable(tx_handle_);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err);
+    }
+    err = i2s_channel_disable(rx_handle_);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err);
+    }
 
     // Reconfigure the I2S TX (STD mode) clock
     i2s_std_clk_config_t std_clk_cfg = {
