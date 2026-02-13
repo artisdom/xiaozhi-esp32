@@ -20,9 +20,50 @@
 
 #define TAG "jpeg_to_image"
 
+// Check if JPEG is progressive (SOF2 marker) - not supported by esp_jpeg_dec
+static bool is_progressive_jpeg(const uint8_t* src, size_t src_len) {
+    if (src_len < 4 || src[0] != 0xFF || src[1] != 0xD8) {
+        return false;  // Not a valid JPEG
+    }
+    
+    size_t i = 2;
+    while (i + 4 < src_len) {
+        if (src[i] != 0xFF) {
+            i++;
+            continue;
+        }
+        uint8_t marker = src[i + 1];
+        
+        // SOF markers: C0-CF (except C4=DHT, C8=JPG, CC=DAC)
+        if (marker == 0xC2) {
+            return true;  // SOF2 = Progressive DCT
+        }
+        if (marker == 0xC0 || marker == 0xC1) {
+            return false;  // SOF0/SOF1 = Baseline/Extended sequential
+        }
+        
+        // Skip marker segment
+        if (marker >= 0xC0 && marker <= 0xFE && marker != 0xD8 && marker != 0xD9) {
+            if (i + 3 >= src_len) break;
+            uint16_t len = (src[i + 2] << 8) | src[i + 3];
+            i += 2 + len;
+        } else {
+            i += 2;
+        }
+    }
+    return false;
+}
+
 static esp_err_t decode_with_new_jpeg(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
                                       size_t* height, size_t* stride) {
     ESP_LOGD(TAG, "Decoding JPEG with software decoder");
+    
+    // Check for progressive JPEG first
+    if (is_progressive_jpeg(src, src_len)) {
+        ESP_LOGW(TAG, "Progressive JPEG not supported");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    
     esp_err_t ret = ESP_OK;
     jpeg_error_t jpeg_ret = JPEG_ERR_OK;
     uint8_t* out_buf = NULL;

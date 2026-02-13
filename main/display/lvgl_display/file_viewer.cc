@@ -1,6 +1,7 @@
 #include "file_viewer.h"
 #include <font_awesome.h>
 #include <esp_log.h>
+#include <esp_err.h>
 #include <esp_heap_caps.h>
 #include <cstdio>
 #include <cstdlib>
@@ -326,7 +327,11 @@ bool ImageViewer::Open(const std::string& path) {
     
     if (ret != ESP_OK || !image_data_) {
         ESP_LOGE(TAG, "Failed to decode image: %s (err=%d)", path.c_str(), ret);
-        ShowError("Failed to decode image\nFormat may not be supported");
+        if (ret == ESP_ERR_NOT_SUPPORTED) {
+            ShowError("Progressive JPEG\nnot supported");
+        } else {
+            ShowError("Failed to decode image\nFormat not supported");
+        }
         lv_obj_clear_flag(container_, LV_OBJ_FLAG_HIDDEN);
         is_visible_ = true;
         return false;
