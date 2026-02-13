@@ -24,6 +24,7 @@ public:
     virtual void EnableInput(bool enable);
     virtual void EnableOutput(bool enable);
     virtual bool SetOutputSampleRate(int sample_rate);  // Returns true if sample rate was changed
+    virtual bool SetOutputChannels(int channels);  // Returns true if channels were changed (1=mono, 2=stereo)
 
     virtual void OutputData(std::vector<int16_t>& data);
     virtual bool InputData(std::vector<int16_t>& data);

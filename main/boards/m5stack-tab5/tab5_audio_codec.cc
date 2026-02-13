@@ -215,10 +215,10 @@ void Tab5AudioCodec::EnableOutput(bool enable) {
         return;
     }
     if (enable) {
-        // Play 16bit 1 channel
+        // Play 16bit with configured channel count (1=mono, 2=stereo)
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
-            .channel = 1,
+            .channel = (uint8_t)output_channels_,
             .channel_mask = 0,
             .sample_rate = (uint32_t)output_sample_rate_,
             .mclk_multiple = 0,
@@ -283,7 +283,7 @@ bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
     if (was_output_enabled) {
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
-            .channel = 1,
+            .channel = (uint8_t)output_channels_,
             .channel_mask = 0,
             .sample_rate = (uint32_t)output_sample_rate_,
             .mclk_multiple = 0,
@@ -294,5 +294,47 @@ bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
     }
 
     ESP_LOGI(TAG, "Output sample rate changed to %d Hz", output_sample_rate_);
+    return true;
+}
+
+bool Tab5AudioCodec::SetOutputChannels(int channels) {
+    if (channels != 1 && channels != 2) {
+        ESP_LOGE(TAG, "Invalid channel count: %d (must be 1 or 2)", channels);
+        return false;
+    }
+    
+    if (channels == output_channels_) {
+        return true;  // Already at this channel count
+    }
+
+    ESP_LOGI(TAG, "Changing output channels from %d to %d", output_channels_, channels);
+
+    // Remember if output was enabled so we can restore it
+    bool was_output_enabled = output_enabled_;
+
+    // Close the codec device if it was open
+    if (was_output_enabled) {
+        ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+        output_enabled_ = false;
+    }
+
+    // Update the channel count
+    output_channels_ = channels;
+
+    // Reopen the codec device if it was open before
+    if (was_output_enabled) {
+        esp_codec_dev_sample_info_t fs = {
+            .bits_per_sample = 16,
+            .channel = (uint8_t)output_channels_,
+            .channel_mask = 0,
+            .sample_rate = (uint32_t)output_sample_rate_,
+            .mclk_multiple = 0,
+        };
+        ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
+        ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
+        output_enabled_ = true;
+    }
+
+    ESP_LOGI(TAG, "Output channels changed to %d", output_channels_);
     return true;
 }

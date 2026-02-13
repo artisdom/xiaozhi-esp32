@@ -545,6 +545,7 @@ void ImageViewer::OnNextButtonClicked(lv_event_t* e) {
 static AudioPlayer* g_current_audio_player = nullptr;
 static bool g_audio_player_initialized = false;
 static int g_original_sample_rate = 0;  // Store original codec sample rate for restoration
+static int g_original_channels = 0;     // Store original codec channel count for restoration
 
 static esp_err_t audio_mute_function(AUDIO_PLAYER_MUTE_SETTING setting) {
     auto codec = Board::GetInstance().GetAudioCodec();
@@ -588,18 +589,29 @@ static esp_err_t audio_i2s_write(void* data, size_t size, size_t* bytes_written,
 static esp_err_t audio_i2s_reconfig_clk(uint32_t rate, uint32_t bits_cfg, i2s_slot_mode_t ch) {
     auto codec = Board::GetInstance().GetAudioCodec();
     if (codec) {
-        // Save original rate before changing (only on first call per playback)
+        // Save original settings before changing (only on first call per playback)
         if (g_original_sample_rate == 0) {
             g_original_sample_rate = codec->output_sample_rate();
-            ESP_LOGI(TAG, "Saved original sample rate: %d Hz", g_original_sample_rate);
+            g_original_channels = codec->output_channels();
+            ESP_LOGI(TAG, "Saved original codec settings: %d Hz, %d channels", 
+                     g_original_sample_rate, g_original_channels);
         }
         
         // Reconfigure to match file's sample rate
         if (codec->SetOutputSampleRate((int)rate)) {
-            ESP_LOGI(TAG, "Audio codec reconfigured to %lu Hz", rate);
+            ESP_LOGI(TAG, "Audio codec sample rate set to %lu Hz", rate);
         } else {
-            ESP_LOGW(TAG, "Sample rate mismatch: file=%lu Hz, codec=%d Hz - audio may sound distorted", 
+            ESP_LOGW(TAG, "Sample rate mismatch: file=%lu Hz, codec=%d Hz", 
                      rate, codec->output_sample_rate());
+        }
+        
+        // Reconfigure to match file's channel count (mono=1, stereo=2)
+        int channels = (ch == I2S_SLOT_MODE_STEREO) ? 2 : 1;
+        if (codec->SetOutputChannels(channels)) {
+            ESP_LOGI(TAG, "Audio codec channels set to %d", channels);
+        } else {
+            ESP_LOGW(TAG, "Channel mismatch: file=%d ch, codec=%d ch", 
+                     channels, codec->output_channels());
         }
     }
     ESP_LOGI(TAG, "Audio player requested clock: rate=%lu, bits=%lu, ch=%d", rate, bits_cfg, (int)ch);
@@ -824,16 +836,21 @@ void AudioPlayer::StopMp3WavFile() {
         // The file handle is now invalid (audio_player closed it)
         audio_file_ = nullptr;
         
-        // Restore original sample rate and disable codec output
+        // Restore original sample rate and channels, then disable codec output
         auto codec = Board::GetInstance().GetAudioCodec();
         if (codec) {
             if (g_original_sample_rate > 0 && codec->output_sample_rate() != g_original_sample_rate) {
                 ESP_LOGI(TAG, "Restoring original sample rate: %d Hz", g_original_sample_rate);
                 codec->SetOutputSampleRate(g_original_sample_rate);
             }
+            if (g_original_channels > 0 && codec->output_channels() != g_original_channels) {
+                ESP_LOGI(TAG, "Restoring original channels: %d", g_original_channels);
+                codec->SetOutputChannels(g_original_channels);
+            }
             codec->EnableOutput(false);
         }
         g_original_sample_rate = 0;  // Reset for next playback
+        g_original_channels = 0;
         is_playing_ = false;
         ESP_LOGI(TAG, "Stopped MP3/WAV playback");
     }

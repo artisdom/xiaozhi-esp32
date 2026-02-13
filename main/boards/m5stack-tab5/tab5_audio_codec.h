@@ -33,6 +33,7 @@ public:
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
     virtual bool SetOutputSampleRate(int sample_rate) override;
+    virtual bool SetOutputChannels(int channels) override;
 };
 
 #endif // _TAB5_AUDIO_CODEC_H
