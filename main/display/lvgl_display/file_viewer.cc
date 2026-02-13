@@ -800,6 +800,9 @@ bool AudioPlayer::PlayMp3WavFile() {
         codec->EnableOutput(true);
     }
     
+    // Suspend AudioService's power timer to prevent it from disabling output during playback
+    Application::GetInstance().GetAudioService().SuspendPowerTimer();
+    
     g_current_audio_player = this;
     
     esp_err_t ret = audio_player_play(audio_file_);
@@ -835,6 +838,9 @@ void AudioPlayer::StopMp3WavFile() {
         
         // The file handle is now invalid (audio_player closed it)
         audio_file_ = nullptr;
+        
+        // Resume AudioService's power timer now that playback is done
+        Application::GetInstance().GetAudioService().ResumePowerTimer();
         
         // Restore original sample rate and channels, then disable codec output
         auto codec = Board::GetInstance().GetAudioCodec();

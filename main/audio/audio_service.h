@@ -133,6 +133,8 @@ public:
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
+    void SuspendPowerTimer();  // Stop auto-disable during external playback
+    void ResumePowerTimer();   // Resume auto-disable after external playback
 
 private:
     AudioCodec* codec_ = nullptr;

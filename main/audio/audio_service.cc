@@ -181,6 +181,17 @@ void AudioService::Stop() {
     audio_queue_cv_.notify_all();
 }
 
+void AudioService::SuspendPowerTimer() {
+    esp_timer_stop(audio_power_timer_);
+}
+
+void AudioService::ResumePowerTimer() {
+    // Reset timestamps so we don't immediately disable
+    last_input_time_ = std::chrono::steady_clock::now();
+    last_output_time_ = std::chrono::steady_clock::now();
+    esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+}
+
 bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {
     if (!codec_->input_enabled()) {
         esp_timer_stop(audio_power_timer_);
