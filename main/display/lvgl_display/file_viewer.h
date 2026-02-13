@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <cstdint>
 
 /**
  * @brief Base class for file viewers
@@ -150,8 +151,14 @@ private:
     lv_obj_t* progress_bar_ = nullptr;
     lv_obj_t* time_label_ = nullptr;
     lv_obj_t* file_info_label_ = nullptr;
+    lv_obj_t* info_label_ = nullptr;
     
     bool is_playing_ = false;
+    bool is_ogg_file_ = false;
+    std::vector<uint8_t> audio_data_;
+    
+    void SetInfoMessage(const char* msg, lv_color_t color);
+    bool PlayOggFile();
     
     static void OnPlayButtonClicked(lv_event_t* e);
     static void OnStopButtonClicked(lv_event_t* e);

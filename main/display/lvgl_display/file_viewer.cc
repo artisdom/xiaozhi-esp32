@@ -7,6 +7,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <sys/stat.h>
+#include <algorithm>
+
+#include "application.h"
 
 #ifndef CONFIG_IDF_TARGET_ESP32
 #include "jpg/jpeg_to_image.h"
@@ -18,6 +21,8 @@ static const char* TAG = "FileViewer";
 #define MAX_TEXT_FILE_SIZE (64 * 1024)
 // Maximum image file size (2MB)
 #define MAX_IMAGE_FILE_SIZE (2 * 1024 * 1024)
+// Maximum audio file size for OGG (4MB)
+#define MAX_AUDIO_FILE_SIZE (4 * 1024 * 1024)
 
 //=============================================================================
 // FileViewer base class
@@ -530,7 +535,9 @@ void ImageViewer::OnNextButtonClicked(lv_event_t* e) {
 
 AudioPlayer::AudioPlayer() {}
 
-AudioPlayer::~AudioPlayer() {}
+AudioPlayer::~AudioPlayer() {
+    audio_data_.clear();
+}
 
 void AudioPlayer::Init(lv_obj_t* parent) {
     FileViewer::Init(parent);
@@ -564,7 +571,7 @@ void AudioPlayer::Init(lv_obj_t* parent) {
     // Time label
     time_label_ = lv_label_create(content_area_);
     lv_obj_set_style_text_color(time_label_, lv_color_hex(0x888888), 0);
-    lv_label_set_text(time_label_, "0:00 / 0:00");
+    lv_label_set_text(time_label_, "");
     
     // Control buttons container
     lv_obj_t* btn_container = lv_obj_create(content_area_);
@@ -600,16 +607,46 @@ void AudioPlayer::Init(lv_obj_t* parent) {
     lv_obj_center(stop_label);
     lv_obj_set_style_text_color(stop_label, lv_color_white(), 0);
     
-    // Info message
-    lv_obj_t* info_msg = lv_label_create(content_area_);
-    lv_obj_set_style_text_color(info_msg, lv_color_hex(0x666666), 0);
-    lv_label_set_text(info_msg, "(Audio playback requires system audio service)");
+    // Info message label
+    info_label_ = lv_label_create(content_area_);
+    lv_obj_set_width(info_label_, LV_HOR_RES - 60);
+    lv_obj_set_style_text_align(info_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(info_label_, lv_color_hex(0x666666), 0);
+    lv_label_set_text(info_label_, "");
     
     ESP_LOGI(TAG, "AudioPlayer initialized");
 }
 
+void AudioPlayer::SetInfoMessage(const char* msg, lv_color_t color) {
+    if (info_label_) {
+        lv_label_set_text(info_label_, msg);
+        lv_obj_set_style_text_color(info_label_, color, 0);
+    }
+}
+
+bool AudioPlayer::PlayOggFile() {
+    if (audio_data_.empty()) {
+        SetInfoMessage("No audio data loaded", lv_color_hex(0xff6666));
+        return false;
+    }
+    
+    auto& app = Application::GetInstance();
+    std::string_view audio_view(reinterpret_cast<const char*>(audio_data_.data()), audio_data_.size());
+    app.GetAudioService().PlaySound(audio_view);
+    
+    SetInfoMessage("Playing...", lv_color_hex(0x4caf50));
+    is_playing_ = true;
+    lv_bar_set_value(progress_bar_, 100, LV_ANIM_ON);
+    
+    ESP_LOGI(TAG, "Playing OGG file: %zu bytes", audio_data_.size());
+    return true;
+}
+
 bool AudioPlayer::Open(const std::string& path) {
     current_file_ = path;
+    audio_data_.clear();
+    is_ogg_file_ = false;
+    is_playing_ = false;
     
     // Extract filename
     const char* filename = strrchr(path.c_str(), '/');
@@ -619,38 +656,101 @@ bool AudioPlayer::Open(const std::string& path) {
     
     // Reset UI state
     lv_bar_set_value(progress_bar_, 0, LV_ANIM_OFF);
-    lv_label_set_text(time_label_, "0:00 / 0:00");
-    is_playing_ = false;
+    lv_label_set_text(time_label_, "");
     
+    // Check file extension
+    std::string name_lower = filename;
+    std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+    
+    if (name_lower.size() >= 4 && name_lower.substr(name_lower.size() - 4) == ".ogg") {
+        is_ogg_file_ = true;
+        
+        // Check file size
+        struct stat st;
+        if (stat(path.c_str(), &st) != 0) {
+            SetInfoMessage("Failed to access file", lv_color_hex(0xff6666));
+            goto show_and_return;
+        }
+        
+        if (st.st_size > MAX_AUDIO_FILE_SIZE) {
+            SetInfoMessage("File too large (max 4MB)", lv_color_hex(0xff6666));
+            goto show_and_return;
+        }
+        
+        // Read file into memory
+        FILE* f = fopen(path.c_str(), "rb");
+        if (!f) {
+            SetInfoMessage("Failed to open file", lv_color_hex(0xff6666));
+            goto show_and_return;
+        }
+        
+        audio_data_.resize(st.st_size);
+        size_t read_len = fread(audio_data_.data(), 1, st.st_size, f);
+        fclose(f);
+        
+        if (read_len != (size_t)st.st_size) {
+            audio_data_.clear();
+            SetInfoMessage("Failed to read file", lv_color_hex(0xff6666));
+            goto show_and_return;
+        }
+        
+        // Show file size info
+        char size_str[64];
+        if (st.st_size < 1024) {
+            snprintf(size_str, sizeof(size_str), "OGG file - %ld bytes", st.st_size);
+        } else if (st.st_size < 1024 * 1024) {
+            snprintf(size_str, sizeof(size_str), "OGG file - %.1f KB", st.st_size / 1024.0);
+        } else {
+            snprintf(size_str, sizeof(size_str), "OGG file - %.1f MB", st.st_size / (1024.0 * 1024.0));
+        }
+        lv_label_set_text(time_label_, size_str);
+        SetInfoMessage("Press play to start", lv_color_hex(0x4caf50));
+        
+        ESP_LOGI(TAG, "Loaded OGG file: %s (%zu bytes)", path.c_str(), audio_data_.size());
+    } else {
+        // Not an OGG file
+        SetInfoMessage("Only OGG format supported\n(MP3/WAV not available)", lv_color_hex(0xffaa00));
+    }
+    
+show_and_return:
     // Show player
     lv_obj_clear_flag(container_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(container_);
     is_visible_ = true;
     
-    ESP_LOGI(TAG, "Opened audio file: %s", path.c_str());
-    return true;
+    return is_ogg_file_ && !audio_data_.empty();
 }
 
 void AudioPlayer::Close() {
     is_playing_ = false;
-    // TODO: Stop any playing audio through audio service
+    audio_data_.clear();
     FileViewer::Close();
 }
 
 void AudioPlayer::OnPlayButtonClicked(lv_event_t* e) {
     AudioPlayer* player = static_cast<AudioPlayer*>(lv_event_get_user_data(e));
-    player->is_playing_ = !player->is_playing_;
     
-    // TODO: Integrate with audio service for actual playback
-    ESP_LOGI(TAG, "Play/Pause toggled: %s", player->is_playing_ ? "playing" : "paused");
+    if (!player->is_ogg_file_) {
+        player->SetInfoMessage("Format not supported", lv_color_hex(0xff6666));
+        return;
+    }
+    
+    if (!player->is_playing_) {
+        player->PlayOggFile();
+    } else {
+        // Audio service doesn't support pause, just show message
+        player->SetInfoMessage("Audio is playing...", lv_color_hex(0x4caf50));
+    }
 }
 
 void AudioPlayer::OnStopButtonClicked(lv_event_t* e) {
     AudioPlayer* player = static_cast<AudioPlayer*>(lv_event_get_user_data(e));
     player->is_playing_ = false;
     lv_bar_set_value(player->progress_bar_, 0, LV_ANIM_ON);
+    player->SetInfoMessage("Stopped", lv_color_hex(0x888888));
     
-    // TODO: Stop audio playback through audio service
+    // Note: Audio service doesn't have a stop method for sounds,
+    // the sound will finish playing naturally
     ESP_LOGI(TAG, "Playback stopped");
 }
 
