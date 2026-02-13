@@ -121,7 +121,7 @@ void FileBrowser::Hide() {
     }
 }
 
-void FileBrowser::NavigateTo(const std::string& path) {
+void FileBrowser::NavigateTo(const std::string path) {  // Take by value to avoid dangling reference
     current_path_ = path;
     RefreshFileList();
     ESP_LOGI(TAG, "Navigated to: %s", path.c_str());

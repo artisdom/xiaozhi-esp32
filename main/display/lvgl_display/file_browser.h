@@ -85,7 +85,7 @@ public:
     /**
      * @brief Navigate to a directory
      */
-    void NavigateTo(const std::string& path);
+    void NavigateTo(const std::string path);  // By value to avoid dangling reference
 
     /**
      * @brief Navigate up to parent directory
