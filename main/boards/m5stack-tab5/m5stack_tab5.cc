@@ -11,6 +11,7 @@
 #include "esp_video_init.h"
 #include "esp_cam_sensor_xclk.h"
 #include "ina226.h"
+#include <driver/temperature_sensor.h>
 
 #include <esp_log.h>
 #include "esp_check.h"
@@ -95,6 +96,7 @@ private:
     Pi4ioe2* pi4ioe2_;
     Ina226* ina226_ = nullptr;
     esp_lcd_touch_handle_t touch_ = nullptr;
+    temperature_sensor_handle_t temp_sensor_ = nullptr;
 
     void InitializeI2c() {
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -534,6 +536,19 @@ public:
         charging = current > 0.05f;       // 50mA threshold
         discharging = current < -0.05f;   // -50mA threshold
         level = ina226_->GetBatteryLevel();
+        return true;
+    }
+
+    virtual bool GetTemperature(float& temperature) override {
+        if (temp_sensor_ == nullptr) {
+            temperature_sensor_config_t temp_sensor_config = {
+                .range_min = 20,
+                .range_max = 100,
+            };
+            ESP_ERROR_CHECK(temperature_sensor_install(&temp_sensor_config, &temp_sensor_));
+            ESP_ERROR_CHECK(temperature_sensor_enable(temp_sensor_));
+        }
+        ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_sensor_, &temperature));
         return true;
     }
 
