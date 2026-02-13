@@ -12,6 +12,10 @@
 #include "esp_cam_sensor_xclk.h"
 #include "ina226.h"
 #include <driver/temperature_sensor.h>
+#include <driver/sdmmc_host.h>
+#include <esp_vfs_fat.h>
+#include <sdmmc_cmd.h>
+#include <sd_pwr_ctrl_by_on_chip_ldo.h>
 
 #include <esp_log.h>
 #include "esp_check.h"
@@ -97,6 +101,8 @@ private:
     Ina226* ina226_ = nullptr;
     esp_lcd_touch_handle_t touch_ = nullptr;
     temperature_sensor_handle_t temp_sensor_ = nullptr;
+    sdmmc_card_t* sd_card_ = nullptr;
+    sd_pwr_ctrl_handle_t sd_pwr_ctrl_ = nullptr;
 
     void InitializeI2c() {
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -161,6 +167,71 @@ private:
         ina226_->Calibrate(0.005f, 8.192f);
         ESP_LOGI(TAG, "INA226 bus voltage: %.2fV", ina226_->ReadBusVoltage());
     }
+
+#if SDCARD_ENABLED
+    void InitializeSdCard() {
+        ESP_LOGI(TAG, "Init SD Card (SDMMC 4-bit mode)");
+
+        // Configure SD card power via on-chip LDO (LDO_VO4)
+        sd_pwr_ctrl_ldo_config_t ldo_config = {
+            .ldo_chan_id = SDCARD_LDO_CHAN,
+        };
+        esp_err_t ret = sd_pwr_ctrl_new_on_chip_ldo(&ldo_config, &sd_pwr_ctrl_);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create SD card power control: %s", esp_err_to_name(ret));
+            return;
+        }
+
+        // Configure SDMMC host
+        sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+        host.slot = SDMMC_HOST_SLOT_0;
+        host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
+        host.pwr_ctrl_handle = sd_pwr_ctrl_;
+
+        // Configure SDMMC slot
+        sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+        slot_config.width = SDCARD_BUS_WIDTH;
+        slot_config.clk = SDCARD_CLK_GPIO;
+        slot_config.cmd = SDCARD_CMD_GPIO;
+        slot_config.d0 = SDCARD_D0_GPIO;
+        slot_config.d1 = SDCARD_D1_GPIO;
+        slot_config.d2 = SDCARD_D2_GPIO;
+        slot_config.d3 = SDCARD_D3_GPIO;
+
+        // Mount configuration
+        esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+            .format_if_mount_failed = false,
+            .max_files = SDCARD_MAX_FILES,
+            .allocation_unit_size = 16 * 1024,
+        };
+
+        ret = esp_vfs_fat_sdmmc_mount(SDCARD_MOUNT_POINT, &host, &slot_config, &mount_config, &sd_card_);
+        if (ret != ESP_OK) {
+            if (ret == ESP_FAIL) {
+                ESP_LOGE(TAG, "Failed to mount SD card filesystem");
+            } else {
+                ESP_LOGE(TAG, "Failed to initialize SD card: %s", esp_err_to_name(ret));
+            }
+            return;
+        }
+
+        // Print SD card info
+        sdmmc_card_print_info(stdout, sd_card_);
+        ESP_LOGI(TAG, "SD card mounted at %s", SDCARD_MOUNT_POINT);
+    }
+
+    void DeinitializeSdCard() {
+        if (sd_card_ != nullptr) {
+            esp_vfs_fat_sdcard_unmount(SDCARD_MOUNT_POINT, sd_card_);
+            sd_card_ = nullptr;
+            ESP_LOGI(TAG, "SD card unmounted");
+        }
+    }
+
+    bool IsSdCardMounted() const {
+        return sd_card_ != nullptr;
+    }
+#endif  // SDCARD_ENABLED
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
@@ -491,6 +562,9 @@ public:
         InitializeDisplay();  // Auto-detect and initialize display + touch
         InitializeCamera();
         InitializeButtons();
+#if SDCARD_ENABLED
+        InitializeSdCard();
+#endif
         SetChargeQcEn(true);
         SetChargeEn(true);
         SetUsb5vEn(true);

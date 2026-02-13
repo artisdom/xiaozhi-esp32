@@ -49,6 +49,22 @@
 
 #define TOUCH_INT_GPIO  GPIO_NUM_23  // 触摸中断
 
+/* ---------------------------------------------------------------- */
+// SD Card 相关参数配置 (SDMMC 4-bit mode)
+#define SDCARD_ENABLED           true
+#define SDCARD_MOUNT_POINT       "/sdcard"
+#define SDCARD_MAX_FILES         5
+#define SDCARD_LDO_CHAN          4
+#define SDCARD_LDO_VOLTAGE_MV    3300
+
+#define SDCARD_CLK_GPIO          GPIO_NUM_43
+#define SDCARD_CMD_GPIO          GPIO_NUM_44
+#define SDCARD_D0_GPIO           GPIO_NUM_39
+#define SDCARD_D1_GPIO           GPIO_NUM_40
+#define SDCARD_D2_GPIO           GPIO_NUM_41
+#define SDCARD_D3_GPIO           GPIO_NUM_42
+#define SDCARD_BUS_WIDTH         4
+
 const ili9881c_lcd_init_cmd_t tab5_lcd_ili9881c_specific_init_code_default[] = {
     // {cmd, { data }, data_size, delay}
     /**** CMD_Page 1 ****/

@@ -11,6 +11,14 @@
 #include <atomic>
 #include <memory>
 
+#if CONFIG_IDF_TARGET_ESP32P4
+class FileBrowser;
+class TextFileViewer;
+class ImageViewer;
+class AudioPlayer;
+class VideoPlayer;
+#endif
+
 #define PREVIEW_IMAGE_DURATION_MS 5000
 
 
@@ -35,6 +43,18 @@ protected:
     esp_timer_handle_t preview_timer_ = nullptr;
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
     bool hide_subtitle_ = false;  // Control whether to hide chat messages/subtitles
+
+#if CONFIG_IDF_TARGET_ESP32P4
+    lv_obj_t* file_browser_btn_ = nullptr;
+    FileBrowser* file_browser_ = nullptr;
+    TextFileViewer* text_viewer_ = nullptr;
+    ImageViewer* image_viewer_ = nullptr;
+    AudioPlayer* audio_player_ = nullptr;
+    VideoPlayer* video_player_ = nullptr;
+    
+    void SetupFileBrowser();
+    void OnFileBrowserFileSelected(const std::string& path, int file_type);
+#endif
 
     void InitializeLcdThemes();
     virtual bool Lock(int timeout_ms = 0) override;

@@ -16,6 +16,11 @@
 
 #include "board.h"
 
+#if CONFIG_IDF_TARGET_ESP32P4
+#include "lvgl_display/file_browser.h"
+#include "lvgl_display/file_viewer.h"
+#endif
+
 #define TAG "LcdDisplay"
 
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
@@ -889,6 +894,28 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_font(mute_label_, icon_font, 0);
     lv_obj_set_style_text_color(mute_label_, lvgl_theme->text_color(), 0);
 
+#if CONFIG_IDF_TARGET_ESP32P4
+    // SD card file browser button
+    file_browser_btn_ = lv_btn_create(right_icons);
+    lv_obj_set_size(file_browser_btn_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(file_browser_btn_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(file_browser_btn_, 0, 0);
+    lv_obj_set_style_pad_all(file_browser_btn_, 4, 0);
+    lv_obj_set_style_margin_left(file_browser_btn_, lvgl_theme->spacing(2), 0);
+    
+    lv_obj_t* sd_label = lv_label_create(file_browser_btn_);
+    lv_label_set_text(sd_label, FONT_AWESOME_SD_CARD);
+    lv_obj_set_style_text_font(sd_label, icon_font, 0);
+    lv_obj_set_style_text_color(sd_label, lvgl_theme->text_color(), 0);
+    
+    lv_obj_add_event_cb(file_browser_btn_, [](lv_event_t* e) {
+        LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
+        if (display->file_browser_ != nullptr) {
+            display->file_browser_->Show("/sdcard");
+        }
+    }, LV_EVENT_CLICKED, this);
+#endif
+
     battery_label_ = lv_label_create(right_icons);
     lv_label_set_text(battery_label_, "");
     lv_obj_set_style_text_font(battery_label_, icon_font, 0);
@@ -966,6 +993,11 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_color(low_battery_label_, lv_color_white(), 0);
     lv_obj_center(low_battery_label_);
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
+
+#if CONFIG_IDF_TARGET_ESP32P4
+    // Initialize file browser and viewers
+    SetupFileBrowser();
+#endif
 }
 
 void LcdDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
@@ -1257,3 +1289,54 @@ void LcdDisplay::SetHideSubtitle(bool hide) {
         }
     }
 }
+
+#if CONFIG_IDF_TARGET_ESP32P4
+void LcdDisplay::SetupFileBrowser() {
+    // Create file browser and viewers
+    file_browser_ = new FileBrowser();
+    text_viewer_ = new TextFileViewer();
+    image_viewer_ = new ImageViewer();
+    audio_player_ = new AudioPlayer();
+    video_player_ = new VideoPlayer();
+    
+    // Initialize all viewers
+    file_browser_->Init();
+    text_viewer_->Init();
+    image_viewer_->Init();
+    audio_player_->Init();
+    video_player_->Init();
+    
+    // Set file selection callback
+    file_browser_->SetFileSelectedCallback([this](const std::string& path, FileType type) {
+        OnFileBrowserFileSelected(path, static_cast<int>(type));
+    });
+}
+
+void LcdDisplay::OnFileBrowserFileSelected(const std::string& path, int file_type) {
+    ESP_LOGI(TAG, "File selected: %s (type: %d)", path.c_str(), file_type);
+    
+    // Hide file browser when opening a file
+    file_browser_->Hide();
+    
+    FileType type = static_cast<FileType>(file_type);
+    switch (type) {
+        case FileType::TEXT:
+        case FileType::CSV:
+            text_viewer_->Open(path);
+            break;
+        case FileType::IMAGE:
+            image_viewer_->Open(path);
+            break;
+        case FileType::AUDIO:
+            audio_player_->Open(path);
+            break;
+        case FileType::VIDEO:
+            video_player_->Open(path);
+            break;
+        default:
+            // Try opening as text for unknown types
+            text_viewer_->Open(path);
+            break;
+    }
+}
+#endif
