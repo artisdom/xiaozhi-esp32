@@ -163,13 +163,36 @@ Communication with AI backend uses:
 
 ### Building
 ```bash
-# use release script for my "M5Stack Tab5" board
+source ~/.espressif/tools/activate_idf_v5.5.2.sh
+
+# 1. Incremental build (fast)
+$IDF_PATH/tools/idf.py -DBOARD_NAME="m5stack-tab5" -DBOARD_TYPE="m5stack-tab5" build
+
+# 2. Fresh build using ESP-IDF build system for the "M5Stack Tab5" board
+$IDF_PATH/tools/idf.py set-target esp32p4
+
+Append the following "CONFIG" to `sdkconfig`:
+
+  "CONFIG_BOARD_TYPE_M5STACK_CORE_TAB5=y"
+  "CONFIG_CAMERA_SC202CS=y"
+  "CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE=y"
+  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=13"
+  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=12"
+  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=11"
+  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=10"
+  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=9"
+  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=8"
+
+# Then run:
+$IDF_PATH/tools/idf.py -DBOARD_NAME="m5stack-tab5" -DBOARD_TYPE="m5stack-tab5" build
+
+# 3. Or use release script for "M5Stack Tab5" board
 python scripts/release.py m5stack-tab5
 ```
 
 ### Flashing
 ```bash
-idf.py -p /dev/ttyACM0 flash monitor
+$IDF_PATH/tools/idf.py -p /dev/ttyACM0 flash monitor
 ```
 
 ## Important Files for Modifications
