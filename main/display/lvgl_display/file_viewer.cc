@@ -567,7 +567,11 @@ static void audio_player_event_callback(audio_player_cb_ctx_t* ctx) {
 // I2S write wrapper for esp-audio-player
 static esp_err_t audio_i2s_write(void* data, size_t size, size_t* bytes_written, uint32_t timeout_ms) {
     auto codec = Board::GetInstance().GetAudioCodec();
-    if (codec && codec->output_enabled()) {
+    if (codec) {
+        // Enable output if not already enabled
+        if (!codec->output_enabled()) {
+            codec->EnableOutput(true);
+        }
         // Convert raw bytes to int16_t samples and use public OutputData method
         int samples = size / sizeof(int16_t);
         std::vector<int16_t> audio_buffer((int16_t*)data, (int16_t*)data + samples);
@@ -581,7 +585,15 @@ static esp_err_t audio_i2s_write(void* data, size_t size, size_t* bytes_written,
 
 // I2S clock reconfiguration wrapper
 static esp_err_t audio_i2s_reconfig_clk(uint32_t rate, uint32_t bits_cfg, i2s_slot_mode_t ch) {
-    // The AudioCodec handles sample rate internally, just return OK
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (codec) {
+        uint32_t codec_rate = codec->output_sample_rate();
+        if (rate != codec_rate) {
+            ESP_LOGW(TAG, "Sample rate mismatch: file=%lu Hz, codec=%lu Hz - audio may sound distorted", 
+                     rate, codec_rate);
+        }
+    }
+    // TODO: Implement sample rate conversion for proper playback of files with different sample rates
     ESP_LOGI(TAG, "Audio player requested clock: rate=%lu, bits=%lu, ch=%d", rate, bits_cfg, (int)ch);
     return ESP_OK;
 }
@@ -592,6 +604,9 @@ AudioPlayer::AudioPlayer() {}
 AudioPlayer::~AudioPlayer() {
     audio_data_.clear();
 #ifdef AUDIO_PLAYER_SUPPORTED
+    // Stop playback if still playing - this handles file closing for played files
+    StopMp3WavFile();
+    // If we opened a file but never played it, close it ourselves
     if (audio_file_) {
         fclose(audio_file_);
         audio_file_ = nullptr;
@@ -759,6 +774,12 @@ bool AudioPlayer::PlayMp3WavFile() {
     // Reset file position to beginning
     fseek(audio_file_, 0, SEEK_SET);
     
+    // Enable audio output before starting playback
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (codec) {
+        codec->EnableOutput(true);
+    }
+    
     g_current_audio_player = this;
     
     esp_err_t ret = audio_player_play(audio_file_);
@@ -782,8 +803,25 @@ bool AudioPlayer::PlayMp3WavFile() {
 
 void AudioPlayer::StopMp3WavFile() {
 #ifdef AUDIO_PLAYER_SUPPORTED
-    if (g_audio_player_initialized) {
+    if (g_audio_player_initialized && is_playing_) {
         audio_player_stop();
+        
+        // Wait for the player to actually stop (it handles file closing)
+        int timeout = 100; // 1 second max
+        while (audio_player_get_state() != AUDIO_PLAYER_STATE_IDLE && timeout > 0) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            timeout--;
+        }
+        
+        // The file handle is now invalid (audio_player closed it)
+        audio_file_ = nullptr;
+        
+        // Disable codec output after stopping
+        auto codec = Board::GetInstance().GetAudioCodec();
+        if (codec) {
+            codec->EnableOutput(false);
+        }
+        is_playing_ = false;
         ESP_LOGI(TAG, "Stopped MP3/WAV playback");
     }
 #endif
@@ -796,7 +834,9 @@ bool AudioPlayer::Open(const std::string& path) {
     is_playing_ = false;
     
 #ifdef AUDIO_PLAYER_SUPPORTED
-    // Close previous file if any
+    // Stop any ongoing playback first (audio_player handles file closing)
+    StopMp3WavFile();
+    // If we had a file open but never started playback, close it ourselves
     if (audio_file_) {
         fclose(audio_file_);
         audio_file_ = nullptr;
@@ -900,6 +940,8 @@ void AudioPlayer::Close() {
     audio_format_ = AudioFormat::kUnknown;
     
 #ifdef AUDIO_PLAYER_SUPPORTED
+    // audio_file_ is closed by audio_player when playing, but if we opened
+    // a file without playing it, we need to close it ourselves
     if (audio_file_) {
         fclose(audio_file_);
         audio_file_ = nullptr;
