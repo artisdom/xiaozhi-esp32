@@ -10,6 +10,7 @@
 #include "esp_video.h"
 #include "esp_video_init.h"
 #include "esp_cam_sensor_xclk.h"
+#include "ina226.h"
 
 #include <esp_log.h>
 #include "esp_check.h"
@@ -92,6 +93,7 @@ private:
     EspVideo* camera_ = nullptr;
     Pi4ioe1* pi4ioe1_;
     Pi4ioe2* pi4ioe2_;
+    Ina226* ina226_ = nullptr;
     esp_lcd_touch_handle_t touch_ = nullptr;
 
     void InitializeI2c() {
@@ -144,6 +146,18 @@ private:
         ESP_LOGI(TAG, "Init I/O Exapander PI4IOE");
         pi4ioe1_ = new Pi4ioe1(i2c_bus_, 0x43);
         pi4ioe2_ = new Pi4ioe2(i2c_bus_, 0x44);
+    }
+
+    void InitializeIna226() {
+        ESP_LOGI(TAG, "Init INA226 Power Monitor");
+        ina226_ = new Ina226(i2c_bus_, INA226_DEFAULT_ADDR);
+        ina226_->Configure(INA226_AVERAGES_16, 
+                           INA226_BUS_CONV_TIME_1100US,
+                           INA226_SHUNT_CONV_TIME_1100US,
+                           INA226_MODE_SHUNT_BUS_CONT);
+        // Shunt resistor: 0.005 ohm, Max current: 8.192A (from M5Tab5 demo)
+        ina226_->Calibrate(0.005f, 8.192f);
+        ESP_LOGI(TAG, "INA226 bus voltage: %.2fV", ina226_->ReadBusVoltage());
     }
 
     void InitializeButtons() {
@@ -471,6 +485,7 @@ public:
         InitializeI2c();
         I2cDetect();
         InitializePi4ioe();
+        InitializeIna226();
         InitializeDisplay();  // Auto-detect and initialize display + touch
         InitializeCamera();
         InitializeButtons();
@@ -508,6 +523,18 @@ public:
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
+    }
+
+    virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
+        if (ina226_ == nullptr) {
+            return false;
+        }
+        // Read current once and determine charging/discharging status
+        float current = ina226_->ReadCurrent();
+        charging = current > 0.05f;       // 50mA threshold
+        discharging = current < -0.05f;   // -50mA threshold
+        level = ina226_->GetBatteryLevel();
+        return true;
     }
 
     // BSP power control functions
