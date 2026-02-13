@@ -876,12 +876,13 @@ bool AudioPlayer::Open(const std::string& path) {
         goto show_and_return;
     }
     
-    if (st.st_size > MAX_AUDIO_FILE_SIZE) {
-        SetInfoMessage("File too large (max 4MB)", lv_color_hex(0xff6666));
-        goto show_and_return;
-    }
-    
     if (audio_format_ == AudioFormat::kOgg) {
+        // OGG files are loaded into memory, so check size limit
+        if (st.st_size > MAX_AUDIO_FILE_SIZE) {
+            SetInfoMessage("File too large (max 4MB)", lv_color_hex(0xff6666));
+            goto show_and_return;
+        }
+        
         // Read OGG file into memory for AudioService
         FILE* f = fopen(path.c_str(), "rb");
         if (!f) {
