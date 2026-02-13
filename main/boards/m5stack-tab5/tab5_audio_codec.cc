@@ -2,6 +2,7 @@
 
 #include <esp_log.h>
 #include <driver/i2c.h>
+#include <driver/i2s_std.h>
 #include <driver/i2s_tdm.h>
 
 #define TAG "Tab5AudioCodec"
@@ -242,4 +243,56 @@ int Tab5AudioCodec::Write(const int16_t* data, int samples) {
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
     }
     return samples;
+}
+
+bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
+    if (sample_rate == output_sample_rate_) {
+        return true;  // Already at this rate
+    }
+
+    ESP_LOGI(TAG, "Changing output sample rate from %d to %d Hz", output_sample_rate_, sample_rate);
+
+    // Remember if output was enabled so we can restore it
+    bool was_output_enabled = output_enabled_;
+
+    // Close the codec device if it was open
+    if (was_output_enabled) {
+        ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+        output_enabled_ = false;
+    }
+
+    // Disable the I2S TX channel before reconfiguring
+    ESP_ERROR_CHECK(i2s_channel_disable(tx_handle_));
+
+    // Reconfigure the I2S standard mode clock
+    i2s_std_clk_config_t clk_cfg = {
+        .sample_rate_hz = (uint32_t)sample_rate,
+        .clk_src = I2S_CLK_SRC_DEFAULT,
+        .ext_clk_freq_hz = 0,
+        .mclk_multiple = I2S_MCLK_MULTIPLE_256
+    };
+    ESP_ERROR_CHECK(i2s_channel_reconfig_std_clock(tx_handle_, &clk_cfg));
+
+    // Re-enable the I2S TX channel
+    ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
+
+    // Update the sample rate
+    output_sample_rate_ = sample_rate;
+
+    // Reopen the codec device if it was open before
+    if (was_output_enabled) {
+        esp_codec_dev_sample_info_t fs = {
+            .bits_per_sample = 16,
+            .channel = 1,
+            .channel_mask = 0,
+            .sample_rate = (uint32_t)output_sample_rate_,
+            .mclk_multiple = 0,
+        };
+        ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
+        ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
+        output_enabled_ = true;
+    }
+
+    ESP_LOGI(TAG, "Output sample rate changed to %d Hz", output_sample_rate_);
+    return true;
 }

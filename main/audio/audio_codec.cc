@@ -65,3 +65,9 @@ void AudioCodec::EnableOutput(bool enable) {
     output_enabled_ = enable;
     ESP_LOGI(TAG, "Set output enable to %s", enable ? "true" : "false");
 }
+
+bool AudioCodec::SetOutputSampleRate(int sample_rate) {
+    // Default implementation: no-op, return false to indicate sample rate change not supported
+    ESP_LOGW(TAG, "SetOutputSampleRate not implemented for this codec");
+    return false;
+}
