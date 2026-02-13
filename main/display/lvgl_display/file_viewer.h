@@ -93,9 +93,12 @@ public:
 
 private:
     lv_obj_t* image_obj_ = nullptr;
-    void* image_data_ = nullptr;
+    lv_obj_t* error_label_ = nullptr;
+    uint8_t* image_data_ = nullptr;
+    lv_image_dsc_t image_dsc_ = {};
     
     void FreeImageData();
+    void ShowError(const char* message);
 };
 
 /**

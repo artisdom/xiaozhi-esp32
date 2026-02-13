@@ -1,10 +1,15 @@
 #include "file_viewer.h"
 #include <font_awesome.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <sys/stat.h>
+
+#ifndef CONFIG_IDF_TARGET_ESP32
+#include "jpg/jpeg_to_image.h"
+#endif
 
 static const char* TAG = "FileViewer";
 
@@ -229,14 +234,30 @@ void ImageViewer::Init(lv_obj_t* parent) {
 
 void ImageViewer::FreeImageData() {
     if (image_data_) {
-        free(image_data_);
+        heap_caps_free(image_data_);
         image_data_ = nullptr;
     }
+    memset(&image_dsc_, 0, sizeof(image_dsc_));
+}
+
+void ImageViewer::ShowError(const char* message) {
+    if (!error_label_) {
+        error_label_ = lv_label_create(content_area_);
+        lv_obj_set_style_text_color(error_label_, lv_color_hex(0xff6666), 0);
+        lv_obj_center(error_label_);
+    }
+    lv_label_set_text(error_label_, message);
+    lv_obj_clear_flag(error_label_, LV_OBJ_FLAG_HIDDEN);
 }
 
 bool ImageViewer::Open(const std::string& path) {
     FreeImageData();
     current_file_ = path;
+    
+    // Hide any previous error
+    if (error_label_) {
+        lv_obj_add_flag(error_label_, LV_OBJ_FLAG_HIDDEN);
+    }
     
     // Extract filename from path
     const char* filename = strrchr(path.c_str(), '/');
@@ -247,29 +268,99 @@ bool ImageViewer::Open(const std::string& path) {
     struct stat st;
     if (stat(path.c_str(), &st) != 0) {
         ESP_LOGE(TAG, "Failed to stat image file: %s", path.c_str());
+        ShowError("Failed to access file");
+        lv_obj_clear_flag(container_, LV_OBJ_FLAG_HIDDEN);
+        is_visible_ = true;
         return false;
     }
     
     if (st.st_size > MAX_IMAGE_FILE_SIZE) {
         ESP_LOGE(TAG, "Image file too large: %ld bytes", st.st_size);
+        ShowError("Image file too large\n(max 2MB)");
+        lv_obj_clear_flag(container_, LV_OBJ_FLAG_HIDDEN);
+        is_visible_ = true;
+        return false;
+    }
+
+#ifndef CONFIG_IDF_TARGET_ESP32
+    // Read the file
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) {
+        ESP_LOGE(TAG, "Failed to open image file: %s", path.c_str());
+        ShowError("Failed to open file");
+        lv_obj_clear_flag(container_, LV_OBJ_FLAG_HIDDEN);
+        is_visible_ = true;
         return false;
     }
     
-    // For LVGL 9, we need to use lv_image_set_src with a file path
-    // Prefix with 'SD:' for SD card files
-    std::string lvgl_path = "S:" + path;
-    lv_image_set_src(image_obj_, lvgl_path.c_str());
-    
-    // Check if image loaded successfully
-    const lv_image_dsc_t* img_dsc = (const lv_image_dsc_t*)lv_image_get_src(image_obj_);
-    if (!img_dsc) {
-        ESP_LOGE(TAG, "Failed to load image: %s", path.c_str());
-        // Show error message
-        lv_obj_t* error_label = lv_label_create(content_area_);
-        lv_label_set_text(error_label, "Failed to load image\nFormat may not be supported");
-        lv_obj_set_style_text_color(error_label, lv_color_hex(0xff6666), 0);
-        lv_obj_center(error_label);
+    // Allocate buffer for file data
+    uint8_t* file_data = (uint8_t*)heap_caps_malloc(st.st_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!file_data) {
+        file_data = (uint8_t*)malloc(st.st_size);
     }
+    if (!file_data) {
+        ESP_LOGE(TAG, "Failed to allocate memory for file: %zu bytes", (size_t)st.st_size);
+        fclose(f);
+        ShowError("Out of memory");
+        lv_obj_clear_flag(container_, LV_OBJ_FLAG_HIDDEN);
+        is_visible_ = true;
+        return false;
+    }
+    
+    size_t read_len = fread(file_data, 1, st.st_size, f);
+    fclose(f);
+    
+    if (read_len != (size_t)st.st_size) {
+        ESP_LOGE(TAG, "Failed to read file: got %zu, expected %zu", read_len, (size_t)st.st_size);
+        heap_caps_free(file_data);
+        ShowError("Failed to read file");
+        lv_obj_clear_flag(container_, LV_OBJ_FLAG_HIDDEN);
+        is_visible_ = true;
+        return false;
+    }
+    
+    // Decode JPEG
+    size_t out_len = 0, width = 0, height = 0, stride = 0;
+    esp_err_t ret = jpeg_to_image(file_data, read_len, &image_data_, &out_len, &width, &height, &stride);
+    heap_caps_free(file_data);  // Free the source file data
+    
+    if (ret != ESP_OK || !image_data_) {
+        ESP_LOGE(TAG, "Failed to decode image: %s (err=%d)", path.c_str(), ret);
+        ShowError("Failed to decode image\nFormat may not be supported");
+        lv_obj_clear_flag(container_, LV_OBJ_FLAG_HIDDEN);
+        is_visible_ = true;
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Decoded image: %zux%zu, stride=%zu, size=%zu", width, height, stride, out_len);
+    
+    // Setup LVGL image descriptor
+    image_dsc_.header.magic = LV_IMAGE_HEADER_MAGIC;
+    image_dsc_.header.cf = LV_COLOR_FORMAT_RGB565;
+    image_dsc_.header.w = width;
+    image_dsc_.header.h = height;
+    image_dsc_.header.stride = stride;
+    image_dsc_.data_size = out_len;
+    image_dsc_.data = image_data_;
+    
+    // Set image source
+    lv_image_set_src(image_obj_, &image_dsc_);
+    
+    // Scale to fit screen while maintaining aspect ratio
+    int32_t max_w = LV_HOR_RES - 32;
+    int32_t max_h = LV_VER_RES - 60 - 32;  // Account for title bar and padding
+    
+    if ((int32_t)width > max_w || (int32_t)height > max_h) {
+        float scale_w = (float)max_w / width;
+        float scale_h = (float)max_h / height;
+        float scale = (scale_w < scale_h) ? scale_w : scale_h;
+        lv_image_set_scale(image_obj_, (uint32_t)(scale * 256));
+    } else {
+        lv_image_set_scale(image_obj_, 256);  // 1:1 scale
+    }
+#else
+    ShowError("Image viewing not supported\non this platform");
+#endif
     
     // Show viewer
     lv_obj_clear_flag(container_, LV_OBJ_FLAG_HIDDEN);
