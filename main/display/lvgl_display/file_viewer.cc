@@ -791,31 +791,8 @@ bool AudioPlayer::PlayMp3WavFile() {
         ESP_LOGI(TAG, "Audio player initialized");
     }
     
-    // Reset file position to beginning
+    // Reset file position to beginning (library handles ID3 tag skipping)
     fseek(audio_file_, 0, SEEK_SET);
-    
-    // Skip ID3v2 tag if present (MP3 files often have ID3 tags that confuse the decoder)
-    if (audio_format_ == AudioFormat::kMp3) {
-        uint8_t header[10];
-        if (fread(header, 1, 10, audio_file_) == 10) {
-            if (header[0] == 'I' && header[1] == 'D' && header[2] == '3') {
-                // ID3v2 tag found - calculate size (syncsafe integer: 4 bytes, 7 bits each)
-                uint32_t tag_size = ((header[6] & 0x7F) << 21) |
-                                   ((header[7] & 0x7F) << 14) |
-                                   ((header[8] & 0x7F) << 7) |
-                                   (header[9] & 0x7F);
-                // Skip past the ID3 tag (header + tag data)
-                long skip_pos = 10 + tag_size;
-                ESP_LOGI(TAG, "Skipping ID3v2 tag: %lu bytes", skip_pos);
-                fseek(audio_file_, skip_pos, SEEK_SET);
-            } else {
-                // No ID3 tag, seek back to start
-                fseek(audio_file_, 0, SEEK_SET);
-            }
-        } else {
-            fseek(audio_file_, 0, SEEK_SET);
-        }
-    }
     
     // Enable audio output before starting playback
     auto codec = Board::GetInstance().GetAudioCodec();
