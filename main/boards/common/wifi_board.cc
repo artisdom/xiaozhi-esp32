@@ -354,5 +354,6 @@ std::string WifiBoard::GetDeviceStatusJson() {
     std::string result(str);
     cJSON_free(str);
     cJSON_Delete(root);
+    ESP_LOGI(TAG, "GetDeviceStatusJson: %s", result.c_str());
     return result;
 }

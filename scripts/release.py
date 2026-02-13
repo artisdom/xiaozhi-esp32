@@ -1,5 +1,6 @@
 import sys
 import os
+import subprocess
 import json
 import zipfile
 import argparse
@@ -39,8 +40,12 @@ def get_project_version() -> Optional[str]:
 
 
 def merge_bin() -> None:
-    if os.system("idf.py merge-bin") != 0:
+    try:
+        result = subprocess.run(['/bin/bash', '-c', 'source $HOME/.espressif/tools/activate_idf_v5.5.2.sh && $IDF_PATH/tools/idf.py merge-bin'], capture_output=False, text=False, check=False)
+    except subprocess.CalledProcessError as e:
         print("merge-bin failed", file=sys.stderr)
+        if e.stderr:
+            print(e.stderr, file=sys.stderr)
         sys.exit(1)
 
 
@@ -238,8 +243,12 @@ def release(board_type: str, config_filename: str = "config.json", *, filter_nam
         os.environ.pop("IDF_TARGET", None)
 
         # Call set-target
-        if os.system(f"idf.py set-target {target}") != 0:
+        try:
+            result = subprocess.run(['/bin/bash', '-c', f'source $HOME/.espressif/tools/activate_idf_v5.5.2.sh && $IDF_PATH/tools/idf.py set-target {target}'], capture_output=False, text=False, check=False)
+        except subprocess.CalledProcessError as e:
             print("set-target failed", file=sys.stderr)
+            if e.stderr:
+                print(e.stderr, file=sys.stderr)
             sys.exit(1)
 
         # Append sdkconfig
@@ -249,8 +258,12 @@ def release(board_type: str, config_filename: str = "config.json", *, filter_nam
             for append in sdkconfig_append:
                 f.write(f"{append}\n")
         # Build with macro BOARD_NAME defined to name
-        if os.system(f"idf.py -DBOARD_NAME={name} -DBOARD_TYPE={board_type} build") != 0:
-            print("build failed")
+        try:
+            result = subprocess.run(['/bin/bash', '-c', f'source $HOME/.espressif/tools/activate_idf_v5.5.2.sh && $IDF_PATH/tools/idf.py -DBOARD_NAME={name} -DBOARD_TYPE={board_type} build'], capture_output=False, text=False, check=False)
+        except subprocess.CalledProcessError as e:
+            print("build failed", file=sys.stderr)
+            if e.stderr:
+                print(e.stderr, file=sys.stderr)
             sys.exit(1)
 
         # merge-bin
