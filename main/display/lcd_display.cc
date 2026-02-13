@@ -894,28 +894,6 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_font(mute_label_, icon_font, 0);
     lv_obj_set_style_text_color(mute_label_, lvgl_theme->text_color(), 0);
 
-#if CONFIG_IDF_TARGET_ESP32P4
-    // SD card file browser button
-    file_browser_btn_ = lv_btn_create(right_icons);
-    lv_obj_set_size(file_browser_btn_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(file_browser_btn_, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(file_browser_btn_, 0, 0);
-    lv_obj_set_style_pad_all(file_browser_btn_, 4, 0);
-    lv_obj_set_style_margin_left(file_browser_btn_, lvgl_theme->spacing(2), 0);
-    
-    lv_obj_t* sd_label = lv_label_create(file_browser_btn_);
-    lv_label_set_text(sd_label, FONT_AWESOME_SD_CARD);
-    lv_obj_set_style_text_font(sd_label, icon_font, 0);
-    lv_obj_set_style_text_color(sd_label, lvgl_theme->text_color(), 0);
-    
-    lv_obj_add_event_cb(file_browser_btn_, [](lv_event_t* e) {
-        LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
-        if (display->file_browser_ != nullptr) {
-            display->file_browser_->Show("/sdcard");
-        }
-    }, LV_EVENT_CLICKED, this);
-#endif
-
     battery_label_ = lv_label_create(right_icons);
     lv_label_set_text(battery_label_, "");
     lv_obj_set_style_text_font(battery_label_, icon_font, 0);
@@ -950,6 +928,44 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_color(status_label_, lvgl_theme->text_color(), 0);
     lv_label_set_text(status_label_, Lang::Strings::INITIALIZING);
     lv_obj_align(status_label_, LV_ALIGN_CENTER, 0, 0);
+
+#if CONFIG_IDF_TARGET_ESP32P4
+    /* Toolbar - horizontal bar below status bar for action buttons */
+    toolbar_ = lv_obj_create(screen);
+    lv_obj_set_size(toolbar_, LV_HOR_RES, 50);
+    lv_obj_set_style_radius(toolbar_, 0, 0);
+    lv_obj_set_style_bg_opa(toolbar_, LV_OPA_50, 0);
+    lv_obj_set_style_bg_color(toolbar_, lvgl_theme->background_color(), 0);
+    lv_obj_set_style_border_width(toolbar_, 0, 0);
+    lv_obj_set_style_pad_all(toolbar_, 0, 0);
+    lv_obj_set_style_pad_left(toolbar_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_style_pad_right(toolbar_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_scrollbar_mode(toolbar_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_align(toolbar_, LV_ALIGN_TOP_MID, 0, text_font->line_height + lvgl_theme->spacing(4));
+
+    // SD card file browser button (top right of toolbar)
+    file_browser_btn_ = lv_btn_create(toolbar_);
+    lv_obj_set_size(file_browser_btn_, 44, 44);
+    lv_obj_set_style_bg_color(file_browser_btn_, lv_color_hex(0x3a3a5e), 0);
+    lv_obj_set_style_bg_opa(file_browser_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(file_browser_btn_, 8, 0);
+    lv_obj_set_style_border_width(file_browser_btn_, 0, 0);
+    lv_obj_set_style_pad_all(file_browser_btn_, 0, 0);
+    lv_obj_align(file_browser_btn_, LV_ALIGN_RIGHT_MID, 0, 0);
+    
+    lv_obj_t* sd_label = lv_label_create(file_browser_btn_);
+    lv_label_set_text(sd_label, FONT_AWESOME_SD_CARD);
+    lv_obj_set_style_text_font(sd_label, icon_font, 0);
+    lv_obj_set_style_text_color(sd_label, lv_color_white(), 0);
+    lv_obj_center(sd_label);
+    
+    lv_obj_add_event_cb(file_browser_btn_, [](lv_event_t* e) {
+        LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
+        if (display->file_browser_ != nullptr) {
+            display->file_browser_->Show("/sdcard");
+        }
+    }, LV_EVENT_CLICKED, this);
+#endif
 
     /* Top layer: Bottom bar - fixed height at bottom */
     bottom_bar_ = lv_obj_create(screen);
