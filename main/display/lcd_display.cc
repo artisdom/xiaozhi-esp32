@@ -930,6 +930,9 @@ void LcdDisplay::SetupUI() {
     lv_obj_align(status_label_, LV_ALIGN_CENTER, 0, 0);
 
 #if CONFIG_IDF_TARGET_ESP32P4
+    // Make status_bar not intercept clicks so toolbar below can receive them
+    lv_obj_clear_flag(status_bar_, LV_OBJ_FLAG_CLICKABLE);
+    
     /* Toolbar - horizontal bar below status bar for action buttons */
     toolbar_ = lv_obj_create(screen);
     lv_obj_set_size(toolbar_, LV_HOR_RES, 50);
@@ -941,6 +944,7 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_pad_left(toolbar_, lvgl_theme->spacing(4), 0);
     lv_obj_set_style_pad_right(toolbar_, lvgl_theme->spacing(4), 0);
     lv_obj_set_scrollbar_mode(toolbar_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(toolbar_, LV_OBJ_FLAG_SCROLLABLE);  // Ensure clicks pass to children
     lv_obj_align(toolbar_, LV_ALIGN_TOP_MID, 0, text_font->line_height + lvgl_theme->spacing(4));
 
     // SD card file browser button (top right of toolbar)
@@ -960,10 +964,18 @@ void LcdDisplay::SetupUI() {
     lv_obj_center(sd_label);
     
     lv_obj_add_event_cb(file_browser_btn_, [](lv_event_t* e) {
+        ESP_LOGI(TAG, "SD Card button clicked");
         LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
-        if (display->file_browser_ != nullptr) {
-            display->file_browser_->Show("/sdcard");
+        if (display == nullptr) {
+            ESP_LOGE(TAG, "Display pointer is null");
+            return;
         }
+        if (display->file_browser_ == nullptr) {
+            ESP_LOGE(TAG, "File browser is null - not initialized yet");
+            return;
+        }
+        ESP_LOGI(TAG, "Calling file_browser_->Show(\"/sdcard\")");
+        display->file_browser_->Show("/sdcard");
     }, LV_EVENT_CLICKED, this);
 #endif
 

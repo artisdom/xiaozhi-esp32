@@ -28,6 +28,7 @@
 #include "i2c_device.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_lcd_touch_st7123.h"
+#include <esp_lvgl_port.h>
 #include <cstring>
 
 #define TAG "M5StackTab5Board"
@@ -270,6 +271,15 @@ private:
         tp_io_config.scl_speed_hz = 100000;
         esp_lcd_new_panel_io_i2c(i2c_bus_, &tp_io_config, &tp_io_handle);
         esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, &touch_);
+        
+        // Register touch with LVGL
+        ESP_LOGI(TAG, "Registering GT911 touch with LVGL");
+        const lvgl_port_touch_cfg_t touch_lvgl_cfg = {
+            .disp = lv_display_get_default(),
+            .handle = touch_,
+        };
+        lvgl_port_add_touch(&touch_lvgl_cfg);
+        ESP_LOGI(TAG, "GT911 touch panel registered with LVGL");
     }
 
     void InitializeIli9881cDisplay() {
@@ -495,6 +505,15 @@ private:
         };
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(i2c_bus_, &tp_io_config, &tp_io_handle));
         ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_st7123(tp_io_handle, &tp_cfg, &touch_));
+        
+        // Register touch with LVGL
+        ESP_LOGI(TAG, "Registering ST7123 touch with LVGL");
+        const lvgl_port_touch_cfg_t touch_lvgl_cfg = {
+            .disp = lv_display_get_default(),
+            .handle = touch_,
+        };
+        lvgl_port_add_touch(&touch_lvgl_cfg);
+        ESP_LOGI(TAG, "ST7123 touch panel registered with LVGL");
     }
 
     void InitializeDisplay() {
