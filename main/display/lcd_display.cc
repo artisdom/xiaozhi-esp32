@@ -1342,6 +1342,17 @@ void LcdDisplay::SetupFileBrowser() {
     file_browser_->SetFileSelectedCallback([this](const std::string& path, FileType type) {
         OnFileBrowserFileSelected(path, static_cast<int>(type));
     });
+    
+    // Set close callbacks to return to file browser
+    auto show_browser = [this]() {
+        if (file_browser_) {
+            file_browser_->Show(file_browser_->GetCurrentPath());
+        }
+    };
+    text_viewer_->SetCloseCallback(show_browser);
+    image_viewer_->SetCloseCallback(show_browser);
+    audio_player_->SetCloseCallback(show_browser);
+    video_player_->SetCloseCallback(show_browser);
 }
 
 void LcdDisplay::OnFileBrowserFileSelected(const std::string& path, int file_type) {
