@@ -134,7 +134,18 @@ private:
 };
 
 /**
+ * @brief Audio file format types
+ */
+enum class AudioFormat {
+    kUnknown,
+    kOgg,
+    kMp3,
+    kWav
+};
+
+/**
  * @brief Audio player with playback controls
+ * Supports OGG (via AudioService), MP3 and WAV (via esp-audio-player)
  */
 class AudioPlayer : public FileViewer {
 public:
@@ -144,6 +155,9 @@ public:
     void Init(lv_obj_t* parent = nullptr) override;
     bool Open(const std::string& path) override;
     void Close() override;
+    
+    // Public for audio player callback access
+    bool is_playing_ = false;
 
 private:
     lv_obj_t* play_btn_ = nullptr;
@@ -153,12 +167,17 @@ private:
     lv_obj_t* file_info_label_ = nullptr;
     lv_obj_t* info_label_ = nullptr;
     
-    bool is_playing_ = false;
-    bool is_ogg_file_ = false;
+    AudioFormat audio_format_ = AudioFormat::kUnknown;
     std::vector<uint8_t> audio_data_;
+    FILE* audio_file_ = nullptr;
     
     void SetInfoMessage(const char* msg, lv_color_t color);
     bool PlayOggFile();
+    bool PlayMp3WavFile();
+    void StopMp3WavFile();
+    
+    static AudioFormat DetectAudioFormat(const std::string& filename);
+    static const char* GetFormatName(AudioFormat format);
     
     static void OnPlayButtonClicked(lv_event_t* e);
     static void OnStopButtonClicked(lv_event_t* e);

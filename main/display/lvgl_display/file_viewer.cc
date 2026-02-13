@@ -10,9 +10,16 @@
 #include <algorithm>
 
 #include "application.h"
+#include "board.h"
 
 #ifndef CONFIG_IDF_TARGET_ESP32
 #include "jpg/jpeg_to_image.h"
+#endif
+
+// MP3/WAV audio player support for ESP32-S3 and ESP32-P4
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32P4)
+#define AUDIO_PLAYER_SUPPORTED 1
+#include <audio_player.h>
 #endif
 
 static const char* TAG = "FileViewer";
@@ -533,10 +540,66 @@ void ImageViewer::OnNextButtonClicked(lv_event_t* e) {
 // AudioPlayer
 //=============================================================================
 
+// Audio player callback and state for MP3/WAV playback
+#ifdef AUDIO_PLAYER_SUPPORTED
+static AudioPlayer* g_current_audio_player = nullptr;
+static bool g_audio_player_initialized = false;
+
+static esp_err_t audio_mute_function(AUDIO_PLAYER_MUTE_SETTING setting) {
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (codec) {
+        codec->EnableOutput(setting == AUDIO_PLAYER_UNMUTE);
+    }
+    return ESP_OK;
+}
+
+static void audio_player_event_callback(audio_player_cb_ctx_t* ctx) {
+    ESP_LOGI(TAG, "Audio player event: %d", (int)ctx->audio_event);
+    
+    audio_player_state_t state = audio_player_get_state();
+    if (state == AUDIO_PLAYER_STATE_IDLE && g_current_audio_player) {
+        // Playback finished
+        g_current_audio_player->is_playing_ = false;
+        ESP_LOGI(TAG, "Audio playback completed");
+    }
+}
+
+// I2S write wrapper for esp-audio-player
+static esp_err_t audio_i2s_write(void* data, size_t size, size_t* bytes_written, uint32_t timeout_ms) {
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (codec && codec->output_enabled()) {
+        // Convert raw bytes to int16_t samples and use public OutputData method
+        int samples = size / sizeof(int16_t);
+        std::vector<int16_t> audio_buffer((int16_t*)data, (int16_t*)data + samples);
+        codec->OutputData(audio_buffer);
+        *bytes_written = size;
+        return ESP_OK;
+    }
+    *bytes_written = 0;
+    return ESP_FAIL;
+}
+
+// I2S clock reconfiguration wrapper
+static esp_err_t audio_i2s_reconfig_clk(uint32_t rate, uint32_t bits_cfg, i2s_slot_mode_t ch) {
+    // The AudioCodec handles sample rate internally, just return OK
+    ESP_LOGI(TAG, "Audio player requested clock: rate=%lu, bits=%lu, ch=%d", rate, bits_cfg, (int)ch);
+    return ESP_OK;
+}
+#endif
+
 AudioPlayer::AudioPlayer() {}
 
 AudioPlayer::~AudioPlayer() {
     audio_data_.clear();
+#ifdef AUDIO_PLAYER_SUPPORTED
+    if (audio_file_) {
+        fclose(audio_file_);
+        audio_file_ = nullptr;
+    }
+    if (g_current_audio_player == this) {
+        g_current_audio_player = nullptr;
+    }
+#endif
 }
 
 void AudioPlayer::Init(lv_obj_t* parent) {
@@ -624,6 +687,28 @@ void AudioPlayer::SetInfoMessage(const char* msg, lv_color_t color) {
     }
 }
 
+AudioFormat AudioPlayer::DetectAudioFormat(const std::string& filename) {
+    std::string name_lower = filename;
+    std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+    
+    if (name_lower.size() >= 4) {
+        std::string ext = name_lower.substr(name_lower.size() - 4);
+        if (ext == ".ogg") return AudioFormat::kOgg;
+        if (ext == ".mp3") return AudioFormat::kMp3;
+        if (ext == ".wav") return AudioFormat::kWav;
+    }
+    return AudioFormat::kUnknown;
+}
+
+const char* AudioPlayer::GetFormatName(AudioFormat format) {
+    switch (format) {
+        case AudioFormat::kOgg: return "OGG";
+        case AudioFormat::kMp3: return "MP3";
+        case AudioFormat::kWav: return "WAV";
+        default: return "Unknown";
+    }
+}
+
 bool AudioPlayer::PlayOggFile() {
     if (audio_data_.empty()) {
         SetInfoMessage("No audio data loaded", lv_color_hex(0xff6666));
@@ -642,11 +727,81 @@ bool AudioPlayer::PlayOggFile() {
     return true;
 }
 
+bool AudioPlayer::PlayMp3WavFile() {
+#ifdef AUDIO_PLAYER_SUPPORTED
+    if (!audio_file_) {
+        SetInfoMessage("No audio file loaded", lv_color_hex(0xff6666));
+        return false;
+    }
+    
+    // Initialize audio player if not already done
+    if (!g_audio_player_initialized) {
+        audio_player_config_t config = {
+            .mute_fn = audio_mute_function,
+            .clk_set_fn = audio_i2s_reconfig_clk,
+            .write_fn = audio_i2s_write,
+            .priority = 5,
+            .coreID = 1,
+        };
+        
+        esp_err_t ret = audio_player_new(config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create audio player: %s", esp_err_to_name(ret));
+            SetInfoMessage("Audio player init failed", lv_color_hex(0xff6666));
+            return false;
+        }
+        
+        audio_player_callback_register(audio_player_event_callback, NULL);
+        g_audio_player_initialized = true;
+        ESP_LOGI(TAG, "Audio player initialized");
+    }
+    
+    // Reset file position to beginning
+    fseek(audio_file_, 0, SEEK_SET);
+    
+    g_current_audio_player = this;
+    
+    esp_err_t ret = audio_player_play(audio_file_);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start playback: %s", esp_err_to_name(ret));
+        SetInfoMessage("Playback failed", lv_color_hex(0xff6666));
+        return false;
+    }
+    
+    SetInfoMessage("Playing...", lv_color_hex(0x4caf50));
+    is_playing_ = true;
+    lv_bar_set_value(progress_bar_, 100, LV_ANIM_ON);
+    
+    ESP_LOGI(TAG, "Started %s playback", GetFormatName(audio_format_));
+    return true;
+#else
+    SetInfoMessage("MP3/WAV not supported\non this platform", lv_color_hex(0xff6666));
+    return false;
+#endif
+}
+
+void AudioPlayer::StopMp3WavFile() {
+#ifdef AUDIO_PLAYER_SUPPORTED
+    if (g_audio_player_initialized) {
+        audio_player_stop();
+        ESP_LOGI(TAG, "Stopped MP3/WAV playback");
+    }
+#endif
+}
+
 bool AudioPlayer::Open(const std::string& path) {
     current_file_ = path;
     audio_data_.clear();
-    is_ogg_file_ = false;
+    audio_format_ = AudioFormat::kUnknown;
     is_playing_ = false;
+    
+#ifdef AUDIO_PLAYER_SUPPORTED
+    // Close previous file if any
+    if (audio_file_) {
+        fclose(audio_file_);
+        audio_file_ = nullptr;
+    }
+#endif
     
     // Extract filename
     const char* filename = strrchr(path.c_str(), '/');
@@ -658,26 +813,23 @@ bool AudioPlayer::Open(const std::string& path) {
     lv_bar_set_value(progress_bar_, 0, LV_ANIM_OFF);
     lv_label_set_text(time_label_, "");
     
-    // Check file extension
-    std::string name_lower = filename;
-    std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+    // Detect format
+    audio_format_ = DetectAudioFormat(filename);
     
-    if (name_lower.size() >= 4 && name_lower.substr(name_lower.size() - 4) == ".ogg") {
-        is_ogg_file_ = true;
-        
-        // Check file size
-        struct stat st;
-        if (stat(path.c_str(), &st) != 0) {
-            SetInfoMessage("Failed to access file", lv_color_hex(0xff6666));
-            goto show_and_return;
-        }
-        
-        if (st.st_size > MAX_AUDIO_FILE_SIZE) {
-            SetInfoMessage("File too large (max 4MB)", lv_color_hex(0xff6666));
-            goto show_and_return;
-        }
-        
-        // Read file into memory
+    // Check file size
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) {
+        SetInfoMessage("Failed to access file", lv_color_hex(0xff6666));
+        goto show_and_return;
+    }
+    
+    if (st.st_size > MAX_AUDIO_FILE_SIZE) {
+        SetInfoMessage("File too large (max 4MB)", lv_color_hex(0xff6666));
+        goto show_and_return;
+    }
+    
+    if (audio_format_ == AudioFormat::kOgg) {
+        // Read OGG file into memory for AudioService
         FILE* f = fopen(path.c_str(), "rb");
         if (!f) {
             SetInfoMessage("Failed to open file", lv_color_hex(0xff6666));
@@ -694,22 +846,38 @@ bool AudioPlayer::Open(const std::string& path) {
             goto show_and_return;
         }
         
-        // Show file size info
+        ESP_LOGI(TAG, "Loaded OGG file: %s (%zu bytes)", path.c_str(), audio_data_.size());
+    }
+#ifdef AUDIO_PLAYER_SUPPORTED
+    else if (audio_format_ == AudioFormat::kMp3 || audio_format_ == AudioFormat::kWav) {
+        // Open file for streaming playback
+        audio_file_ = fopen(path.c_str(), "rb");
+        if (!audio_file_) {
+            SetInfoMessage("Failed to open file", lv_color_hex(0xff6666));
+            goto show_and_return;
+        }
+        
+        ESP_LOGI(TAG, "Opened %s file: %s (%ld bytes)", GetFormatName(audio_format_), path.c_str(), st.st_size);
+    }
+#endif
+    else {
+        SetInfoMessage("Unsupported audio format", lv_color_hex(0xffaa00));
+        goto show_and_return;
+    }
+    
+    // Show file size info
+    {
         char size_str[64];
+        const char* fmt_name = GetFormatName(audio_format_);
         if (st.st_size < 1024) {
-            snprintf(size_str, sizeof(size_str), "OGG file - %ld bytes", st.st_size);
+            snprintf(size_str, sizeof(size_str), "%s file - %ld bytes", fmt_name, st.st_size);
         } else if (st.st_size < 1024 * 1024) {
-            snprintf(size_str, sizeof(size_str), "OGG file - %.1f KB", st.st_size / 1024.0);
+            snprintf(size_str, sizeof(size_str), "%s file - %.1f KB", fmt_name, st.st_size / 1024.0);
         } else {
-            snprintf(size_str, sizeof(size_str), "OGG file - %.1f MB", st.st_size / (1024.0 * 1024.0));
+            snprintf(size_str, sizeof(size_str), "%s file - %.1f MB", fmt_name, st.st_size / (1024.0 * 1024.0));
         }
         lv_label_set_text(time_label_, size_str);
         SetInfoMessage("Press play to start", lv_color_hex(0x4caf50));
-        
-        ESP_LOGI(TAG, "Loaded OGG file: %s (%zu bytes)", path.c_str(), audio_data_.size());
-    } else {
-        // Not an OGG file
-        SetInfoMessage("Only OGG format supported\n(MP3/WAV not available)", lv_color_hex(0xffaa00));
     }
     
 show_and_return:
@@ -718,39 +886,67 @@ show_and_return:
     lv_obj_move_foreground(container_);
     is_visible_ = true;
     
-    return is_ogg_file_ && !audio_data_.empty();
+    bool file_ready = (audio_format_ == AudioFormat::kOgg && !audio_data_.empty());
+#ifdef AUDIO_PLAYER_SUPPORTED
+    file_ready = file_ready || ((audio_format_ == AudioFormat::kMp3 || audio_format_ == AudioFormat::kWav) && audio_file_ != nullptr);
+#endif
+    return file_ready;
 }
 
 void AudioPlayer::Close() {
+    StopMp3WavFile();
     is_playing_ = false;
     audio_data_.clear();
+    audio_format_ = AudioFormat::kUnknown;
+    
+#ifdef AUDIO_PLAYER_SUPPORTED
+    if (audio_file_) {
+        fclose(audio_file_);
+        audio_file_ = nullptr;
+    }
+    if (g_current_audio_player == this) {
+        g_current_audio_player = nullptr;
+    }
+#endif
+    
     FileViewer::Close();
 }
 
 void AudioPlayer::OnPlayButtonClicked(lv_event_t* e) {
     AudioPlayer* player = static_cast<AudioPlayer*>(lv_event_get_user_data(e));
     
-    if (!player->is_ogg_file_) {
+    if (player->audio_format_ == AudioFormat::kUnknown) {
         player->SetInfoMessage("Format not supported", lv_color_hex(0xff6666));
         return;
     }
     
     if (!player->is_playing_) {
-        player->PlayOggFile();
+        bool success = false;
+        if (player->audio_format_ == AudioFormat::kOgg) {
+            success = player->PlayOggFile();
+        } else {
+            success = player->PlayMp3WavFile();
+        }
+        if (!success) {
+            ESP_LOGE(TAG, "Failed to start playback");
+        }
     } else {
-        // Audio service doesn't support pause, just show message
+        // Audio is already playing
         player->SetInfoMessage("Audio is playing...", lv_color_hex(0x4caf50));
     }
 }
 
 void AudioPlayer::OnStopButtonClicked(lv_event_t* e) {
     AudioPlayer* player = static_cast<AudioPlayer*>(lv_event_get_user_data(e));
+    
+    if (player->audio_format_ == AudioFormat::kMp3 || player->audio_format_ == AudioFormat::kWav) {
+        player->StopMp3WavFile();
+    }
+    
     player->is_playing_ = false;
     lv_bar_set_value(player->progress_bar_, 0, LV_ANIM_ON);
     player->SetInfoMessage("Stopped", lv_color_hex(0x888888));
     
-    // Note: Audio service doesn't have a stop method for sounds,
-    // the sound will finish playing naturally
     ESP_LOGI(TAG, "Playback stopped");
 }
 
