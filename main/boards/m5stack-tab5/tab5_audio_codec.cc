@@ -252,13 +252,18 @@ bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
 
     ESP_LOGI(TAG, "Changing output sample rate from %d to %d Hz", output_sample_rate_, sample_rate);
 
-    // Remember if output was enabled so we can restore it
+    // Remember which codec devices were enabled so we can restore them
     bool was_output_enabled = output_enabled_;
+    bool was_input_enabled = input_enabled_;
 
-    // Close the codec device if it was open
+    // Close both codec devices before reconfiguring I2S
     if (was_output_enabled) {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
         output_enabled_ = false;
+    }
+    if (was_input_enabled) {
+        ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
+        input_enabled_ = false;
     }
 
     // Disable BOTH TX and RX channels before reconfiguring (duplex mode shares clock)
@@ -292,7 +297,24 @@ bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
     output_sample_rate_ = sample_rate;
     input_sample_rate_ = sample_rate;
 
-    // Reopen the codec device if it was open before
+    // Reopen the input codec device if it was open before
+    if (was_input_enabled) {
+        esp_codec_dev_sample_info_t fs = {
+            .bits_per_sample = 16,
+            .channel = 4,
+            .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
+            .sample_rate = (uint32_t)input_sample_rate_,
+            .mclk_multiple = 0,
+        };
+        if (input_reference_) {
+            fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
+        }
+        ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
+        ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_));
+        input_enabled_ = true;
+    }
+
+    // Reopen the output codec device if it was open before
     if (was_output_enabled) {
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
