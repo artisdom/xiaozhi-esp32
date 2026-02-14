@@ -182,6 +182,7 @@ void AudioService::Stop() {
 }
 
 void AudioService::SuspendPowerTimer() {
+    power_timer_suspended_ = true;  // Set flag first to handle in-flight callbacks
     esp_timer_stop(audio_power_timer_);
 }
 
@@ -189,6 +190,7 @@ void AudioService::ResumePowerTimer() {
     // Reset timestamps so we don't immediately disable
     last_input_time_ = std::chrono::steady_clock::now();
     last_output_time_ = std::chrono::steady_clock::now();
+    power_timer_suspended_ = false;
     esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
 }
 
@@ -691,6 +693,11 @@ void AudioService::ResetDecoder() {
 }
 
 void AudioService::CheckAndUpdateAudioPowerState() {
+    // Skip if power timer is suspended (external playback in progress)
+    if (power_timer_suspended_) {
+        return;
+    }
+    
     auto now = std::chrono::steady_clock::now();
     auto input_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_input_time_).count();
     auto output_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_output_time_).count();

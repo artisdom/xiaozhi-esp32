@@ -185,6 +185,7 @@ private:
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
     std::chrono::steady_clock::time_point last_output_time_;
+    volatile bool power_timer_suspended_ = false;  // Flag to block disable during external playback
 
     void AudioInputTask();
     void AudioOutputTask();
