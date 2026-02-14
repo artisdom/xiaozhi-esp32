@@ -794,14 +794,14 @@ bool AudioPlayer::PlayMp3WavFile() {
     // Reset file position to beginning (library handles ID3 tag skipping)
     fseek(audio_file_, 0, SEEK_SET);
     
+    // Suspend AudioService's power timer FIRST to prevent race condition
+    Application::GetInstance().GetAudioService().SuspendPowerTimer();
+    
     // Enable audio output before starting playback
     auto codec = Board::GetInstance().GetAudioCodec();
     if (codec) {
         codec->EnableOutput(true);
     }
-    
-    // Suspend AudioService's power timer to prevent it from disabling output during playback
-    Application::GetInstance().GetAudioService().SuspendPowerTimer();
     
     g_current_audio_player = this;
     
