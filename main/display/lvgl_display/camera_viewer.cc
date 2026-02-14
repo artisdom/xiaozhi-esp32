@@ -9,6 +9,8 @@
 #include <dirent.h>
 #include <ctime>
 
+#include <errno.h>
+
 #include "board.h"
 #include "camera.h"
 
@@ -165,14 +167,24 @@ void CameraViewer::Show() {
         return;
     }
     
-    // Create Camera folder if it doesn't exist
+    // Check if SD card is mounted (/sdcard should exist)
     struct stat st;
+    if (stat("/sdcard", &st) != 0) {
+        ESP_LOGE(TAG, "SD card not mounted at /sdcard");
+        ShowStatus("SD card not found", 3000);
+        return;
+    }
+    
+    // Create Camera folder if it doesn't exist
     if (stat(CAMERA_FOLDER, &st) != 0) {
         if (mkdir(CAMERA_FOLDER, 0755) != 0) {
-            ESP_LOGW(TAG, "Failed to create Camera folder: %s", CAMERA_FOLDER);
+            ESP_LOGW(TAG, "Failed to create Camera folder: %s, errno=%d (%s)", 
+                     CAMERA_FOLDER, errno, strerror(errno));
         } else {
             ESP_LOGI(TAG, "Created Camera folder: %s", CAMERA_FOLDER);
         }
+    } else {
+        ESP_LOGI(TAG, "Camera folder exists: %s", CAMERA_FOLDER);
     }
     
     is_visible_.store(true);

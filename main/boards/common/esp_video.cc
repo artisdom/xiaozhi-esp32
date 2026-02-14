@@ -1155,7 +1155,8 @@ bool EspVideo::SaveJpegToFile(const std::string& path, int quality) {
                 fclose(file);
                 ESP_LOGI(TAG, "SaveJpegToFile: saved %zu bytes to %s", jpeg_size, path.c_str());
             } else {
-                ESP_LOGE(TAG, "SaveJpegToFile: failed to open %s for writing", path.c_str());
+                ESP_LOGE(TAG, "SaveJpegToFile: failed to open %s for writing, errno=%d (%s)", 
+                         path.c_str(), errno, strerror(errno));
             }
             heap_caps_free(jpeg_data);
         } else {
