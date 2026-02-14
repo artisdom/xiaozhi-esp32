@@ -20,6 +20,7 @@
 #if CONFIG_IDF_TARGET_ESP32P4
 #include "lvgl_display/file_browser.h"
 #include "lvgl_display/file_viewer.h"
+#include "lvgl_display/camera_viewer.h"
 #endif
 
 #define TAG "LcdDisplay"
@@ -981,6 +982,37 @@ void LcdDisplay::SetupUI() {
         ESP_LOGI(TAG, "Calling file_browser_->Show(\"/sdcard\")");
         display->file_browser_->Show("/sdcard");
     }, LV_EVENT_CLICKED, this);
+
+    // Camera button (left of SD card button)
+    camera_btn_ = lv_btn_create(toolbar_);
+    lv_obj_set_size(camera_btn_, 44, 44);
+    lv_obj_set_style_bg_color(camera_btn_, lv_color_hex(0x3a3a5e), 0);
+    lv_obj_set_style_bg_opa(camera_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(camera_btn_, 8, 0);
+    lv_obj_set_style_border_width(camera_btn_, 0, 0);
+    lv_obj_set_style_pad_all(camera_btn_, 0, 0);
+    lv_obj_align_to(camera_btn_, file_browser_btn_, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+    
+    lv_obj_t* camera_label = lv_label_create(camera_btn_);
+    lv_label_set_text(camera_label, FONT_AWESOME_CAMERA);
+    lv_obj_set_style_text_font(camera_label, icon_font, 0);
+    lv_obj_set_style_text_color(camera_label, lv_color_white(), 0);
+    lv_obj_center(camera_label);
+    
+    lv_obj_add_event_cb(camera_btn_, [](lv_event_t* e) {
+        ESP_LOGI(TAG, "Camera button clicked");
+        LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
+        if (display == nullptr) {
+            ESP_LOGE(TAG, "Display pointer is null");
+            return;
+        }
+        if (display->camera_viewer_ == nullptr) {
+            ESP_LOGE(TAG, "Camera viewer is null - not initialized yet");
+            return;
+        }
+        ESP_LOGI(TAG, "Calling camera_viewer_->Show()");
+        display->camera_viewer_->Show();
+    }, LV_EVENT_CLICKED, this);
 #endif
 
     /* Top layer: Bottom bar - fixed height at bottom */
@@ -1330,6 +1362,7 @@ void LcdDisplay::SetupFileBrowser() {
     image_viewer_ = new ImageViewer();
     audio_player_ = new AudioPlayer();
     video_player_ = new VideoPlayer();
+    camera_viewer_ = new CameraViewer();
     
     // Initialize all viewers
     file_browser_->Init();
@@ -1337,6 +1370,7 @@ void LcdDisplay::SetupFileBrowser() {
     image_viewer_->Init();
     audio_player_->Init();
     video_player_->Init();
+    camera_viewer_->Init();
     
     // Set file selection callback
     file_browser_->SetFileSelectedCallback([this](const std::string& path, FileType type) {

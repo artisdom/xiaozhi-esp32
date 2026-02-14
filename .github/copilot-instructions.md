@@ -173,15 +173,15 @@ $IDF_PATH/tools/idf.py set-target esp32p4
 
 Append the following "CONFIG" to `sdkconfig`:
 
-  "CONFIG_BOARD_TYPE_M5STACK_CORE_TAB5=y"
-  "CONFIG_CAMERA_SC202CS=y"
-  "CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE=y"
-  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=13"
-  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=12"
-  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=11"
-  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=10"
-  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=9"
-  "CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=8"
+CONFIG_BOARD_TYPE_M5STACK_CORE_TAB5=y
+CONFIG_CAMERA_SC202CS=y
+CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE=y
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=13
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=12
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=11
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=10
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=9
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=8
 
 # Then run:
 $IDF_PATH/tools/idf.py -DBOARD_NAME="m5stack-tab5" -DBOARD_TYPE="m5stack-tab5" build
@@ -236,3 +236,7 @@ $IDF_PATH/tools/idf.py -p /dev/ttyACM0 flash monitor
 ## Language Note
 
 Code comments and documentation may be in Chinese (中文) or English. The codebase is bilingual - when adding comments, match the surrounding context or use English for technical terms.
+
+## Reference Implementations
+Camera, microphone and other functionalities
+You can always use /home/ted/w/esp32/M5Tab5-UserDemo as a reference, that already has camera, microphone and other functionalities inside.
