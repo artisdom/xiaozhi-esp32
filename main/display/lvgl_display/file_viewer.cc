@@ -560,21 +560,12 @@ static void audio_player_event_callback(audio_player_cb_ctx_t* ctx) {
     
     audio_player_state_t state = audio_player_get_state();
     if (state == AUDIO_PLAYER_STATE_IDLE && g_current_audio_player) {
-        // Playback finished naturally - restore codec settings
+        // Playback finished - just disable output, don't restore sample rate
+        // (audio_player caches rate internally - restoring causes mismatch on next play)
         auto codec = Board::GetInstance().GetAudioCodec();
         if (codec) {
-            if (g_original_sample_rate > 0 && codec->output_sample_rate() != g_original_sample_rate) {
-                ESP_LOGI(TAG, "Restoring original sample rate: %d Hz", g_original_sample_rate);
-                codec->SetOutputSampleRate(g_original_sample_rate);
-            }
-            if (g_original_channels > 0 && codec->output_channels() != g_original_channels) {
-                ESP_LOGI(TAG, "Restoring original channels: %d", g_original_channels);
-                codec->SetOutputChannels(g_original_channels);
-            }
             codec->EnableOutput(false);
         }
-        g_original_sample_rate = 0;
-        g_original_channels = 0;
         
         // Resume AudioService's power timer
         Application::GetInstance().GetAudioService().ResumePowerTimer();
@@ -652,6 +643,22 @@ AudioPlayer::~AudioPlayer() {
     if (g_current_audio_player == this) {
         g_current_audio_player = nullptr;
     }
+    
+    // Restore original sample rate and channels when leaving file browser
+    // (for voice input to work correctly)
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (codec) {
+        if (g_original_sample_rate > 0 && codec->output_sample_rate() != g_original_sample_rate) {
+            ESP_LOGI(TAG, "Restoring original sample rate: %d Hz", g_original_sample_rate);
+            codec->SetOutputSampleRate(g_original_sample_rate);
+        }
+        if (g_original_channels > 0 && codec->output_channels() != g_original_channels) {
+            ESP_LOGI(TAG, "Restoring original channels: %d", g_original_channels);
+            codec->SetOutputChannels(g_original_channels);
+        }
+    }
+    g_original_sample_rate = 0;
+    g_original_channels = 0;
 #endif
 }
 
@@ -860,21 +867,13 @@ void AudioPlayer::StopMp3WavFile() {
         // Resume AudioService's power timer now that playback is done
         Application::GetInstance().GetAudioService().ResumePowerTimer();
         
-        // Restore original sample rate and channels, then disable codec output
+        // Don't restore sample rate here - audio_player caches it internally
+        // and won't call reconfig_clk for next file at same rate.
+        // Sample rate will be restored in destructor when leaving file browser.
         auto codec = Board::GetInstance().GetAudioCodec();
         if (codec) {
-            if (g_original_sample_rate > 0 && codec->output_sample_rate() != g_original_sample_rate) {
-                ESP_LOGI(TAG, "Restoring original sample rate: %d Hz", g_original_sample_rate);
-                codec->SetOutputSampleRate(g_original_sample_rate);
-            }
-            if (g_original_channels > 0 && codec->output_channels() != g_original_channels) {
-                ESP_LOGI(TAG, "Restoring original channels: %d", g_original_channels);
-                codec->SetOutputChannels(g_original_channels);
-            }
             codec->EnableOutput(false);
         }
-        g_original_sample_rate = 0;  // Reset for next playback
-        g_original_channels = 0;
         is_playing_ = false;
         ESP_LOGI(TAG, "Stopped MP3/WAV playback");
     }
@@ -1004,6 +1003,22 @@ void AudioPlayer::Close() {
     if (g_current_audio_player == this) {
         g_current_audio_player = nullptr;
     }
+    
+    // Restore original sample rate and channels when closing audio viewer
+    // (for voice input to work correctly when returning to main UI)
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (codec) {
+        if (g_original_sample_rate > 0 && codec->output_sample_rate() != g_original_sample_rate) {
+            ESP_LOGI(TAG, "Restoring original sample rate: %d Hz", g_original_sample_rate);
+            codec->SetOutputSampleRate(g_original_sample_rate);
+        }
+        if (g_original_channels > 0 && codec->output_channels() != g_original_channels) {
+            ESP_LOGI(TAG, "Restoring original channels: %d", g_original_channels);
+            codec->SetOutputChannels(g_original_channels);
+        }
+    }
+    g_original_sample_rate = 0;
+    g_original_channels = 0;
 #endif
     
     FileViewer::Close();

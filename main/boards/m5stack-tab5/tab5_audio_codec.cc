@@ -280,6 +280,21 @@ bool Tab5AudioCodec::SetOutputSampleRate(int sample_rate) {
     output_sample_rate_ = sample_rate;
     input_sample_rate_ = sample_rate;
 
+    // If nothing was enabled, we still need to reconfigure I2S hardware.
+    // Open and close input device briefly to force I2S_IF to update.
+    if (!was_input_enabled && !was_output_enabled) {
+        esp_codec_dev_sample_info_t fs = {
+            .bits_per_sample = 16,
+            .channel = 4,
+            .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
+            .sample_rate = (uint32_t)input_sample_rate_,
+            .mclk_multiple = 0,
+        };
+        ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
+        ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
+        ESP_LOGI(TAG, "Forced I2S reconfiguration to %d Hz", sample_rate);
+    }
+
     // Reopen the input codec device first (RX) if it was open before
     // Opening with the new sample rate will reconfigure I2S through I2S_IF
     if (was_input_enabled) {
