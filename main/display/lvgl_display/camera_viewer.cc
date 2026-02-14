@@ -18,17 +18,19 @@
 
 static const char* TAG = "CameraViewer";
 
-// Camera preview resolution (can be adjusted for performance)
-#define CAMERA_PREVIEW_WIDTH  1280
-#define CAMERA_PREVIEW_HEIGHT 720
+// Camera preview resolution - kept small to avoid DSI underrun
+// Full camera resolution is still used for photo capture
+#define CAMERA_PREVIEW_WIDTH  480
+#define CAMERA_PREVIEW_HEIGHT 320
 
 // SD card camera folder
 #define CAMERA_FOLDER "/sdcard/Camera"
 
 // Task configuration
 #define CAMERA_TASK_STACK_SIZE (8 * 1024)
-#define CAMERA_TASK_PRIORITY   5
+#define CAMERA_TASK_PRIORITY   3  // Lower priority to not starve LCD refresh
 #define COMMAND_QUEUE_SIZE     10
+#define CAMERA_FRAME_DELAY_MS  50  // ~20fps to reduce PSRAM bandwidth usage
 
 //=============================================================================
 // CameraViewer implementation
@@ -395,7 +397,7 @@ void CameraViewer::CameraTaskFunc(void* arg) {
         // Release the frame back to camera
         camera->ReleasePreviewFrame();
         
-        vTaskDelay(pdMS_TO_TICKS(16)); // ~60fps target
+        vTaskDelay(pdMS_TO_TICKS(CAMERA_FRAME_DELAY_MS)); // ~20fps to reduce PSRAM load
     }
     
     // Cleanup
