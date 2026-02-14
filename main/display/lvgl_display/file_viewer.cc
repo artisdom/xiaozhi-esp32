@@ -560,7 +560,25 @@ static void audio_player_event_callback(audio_player_cb_ctx_t* ctx) {
     
     audio_player_state_t state = audio_player_get_state();
     if (state == AUDIO_PLAYER_STATE_IDLE && g_current_audio_player) {
-        // Playback finished
+        // Playback finished naturally - restore codec settings
+        auto codec = Board::GetInstance().GetAudioCodec();
+        if (codec) {
+            if (g_original_sample_rate > 0 && codec->output_sample_rate() != g_original_sample_rate) {
+                ESP_LOGI(TAG, "Restoring original sample rate: %d Hz", g_original_sample_rate);
+                codec->SetOutputSampleRate(g_original_sample_rate);
+            }
+            if (g_original_channels > 0 && codec->output_channels() != g_original_channels) {
+                ESP_LOGI(TAG, "Restoring original channels: %d", g_original_channels);
+                codec->SetOutputChannels(g_original_channels);
+            }
+            codec->EnableOutput(false);
+        }
+        g_original_sample_rate = 0;
+        g_original_channels = 0;
+        
+        // Resume AudioService's power timer
+        Application::GetInstance().GetAudioService().ResumePowerTimer();
+        
         g_current_audio_player->is_playing_ = false;
         ESP_LOGI(TAG, "Audio playback completed");
     }
