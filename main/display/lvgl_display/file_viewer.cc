@@ -789,6 +789,17 @@ bool AudioPlayer::PlayOggFile() {
 
 bool AudioPlayer::PlayMp3WavFile() {
 #ifdef AUDIO_PLAYER_SUPPORTED
+    // Re-open file if it was closed by previous stop (audio_player closes it)
+    if (!audio_file_ && !current_file_.empty()) {
+        audio_file_ = fopen(current_file_.c_str(), "rb");
+        if (!audio_file_) {
+            ESP_LOGE(TAG, "Failed to re-open file: %s", current_file_.c_str());
+            SetInfoMessage("Failed to open file", lv_color_hex(0xff6666));
+            return false;
+        }
+        ESP_LOGI(TAG, "Re-opened file for playback: %s", current_file_.c_str());
+    }
+    
     if (!audio_file_) {
         SetInfoMessage("No audio file loaded", lv_color_hex(0xff6666));
         return false;
