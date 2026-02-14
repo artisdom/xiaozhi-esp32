@@ -96,7 +96,6 @@ private:
     void CreateUI(lv_obj_t* parent);
     void StartPreview();
     void StopPreview();
-    bool SaveJpegToSdCard(uint8_t* jpeg_data, size_t jpeg_size);
     std::string GeneratePhotoFilename();
     void ShowStatus(const char* message, uint32_t duration_ms = 2000);
     

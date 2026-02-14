@@ -1039,3 +1039,129 @@ std::string EspVideo::Explain(const std::string& question) {
              (int)frame_.len, (int)total_sent, (int)remain_stack_size, question.c_str(), result.c_str());
     return result;
 }
+
+bool EspVideo::GetPreviewFrame(uint8_t** data, size_t* len, uint16_t* width, uint16_t* height) {
+    if (!streaming_on_ || video_fd_ < 0) {
+        ESP_LOGD(TAG, "GetPreviewFrame: camera not ready");
+        return false;
+    }
+    
+    if (preview_frame_locked_) {
+        ESP_LOGW(TAG, "GetPreviewFrame: previous frame not released");
+        return false;
+    }
+
+    struct v4l2_buffer buf = {};
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    
+    if (ioctl(video_fd_, VIDIOC_DQBUF, &buf) != 0) {
+        ESP_LOGE(TAG, "GetPreviewFrame: VIDIOC_DQBUF failed, errno=%d(%s)", errno, strerror(errno));
+        return false;
+    }
+
+    // Allocate or reuse preview buffer
+    size_t needed_size = buf.bytesused;
+    if (preview_frame_data_ == nullptr || preview_frame_len_ < needed_size) {
+        if (preview_frame_data_) {
+            heap_caps_free(preview_frame_data_);
+        }
+        preview_frame_data_ = (uint8_t*)heap_caps_malloc(needed_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!preview_frame_data_) {
+            ESP_LOGE(TAG, "GetPreviewFrame: failed to allocate %zu bytes", needed_size);
+            ioctl(video_fd_, VIDIOC_QBUF, &buf);
+            return false;
+        }
+        preview_frame_len_ = needed_size;
+    }
+
+    // Copy frame data
+    memcpy(preview_frame_data_, mmap_buffers_[buf.index].start, needed_size);
+    
+    // Queue buffer back
+    if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+        ESP_LOGE(TAG, "GetPreviewFrame: VIDIOC_QBUF failed");
+    }
+
+    *data = preview_frame_data_;
+    *len = needed_size;
+#ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
+    *width = sensor_height_;
+    *height = sensor_width_;
+#else
+    *width = frame_.width;
+    *height = frame_.height;
+#endif
+    preview_frame_locked_ = true;
+    return true;
+}
+
+void EspVideo::ReleasePreviewFrame() {
+    preview_frame_locked_ = false;
+}
+
+bool EspVideo::SaveJpegToFile(const std::string& path, int quality) {
+    if (!streaming_on_ || video_fd_ < 0) {
+        ESP_LOGE(TAG, "SaveJpegToFile: camera not ready");
+        return false;
+    }
+
+    // Capture a fresh frame
+    if (!Capture()) {
+        ESP_LOGE(TAG, "SaveJpegToFile: failed to capture frame");
+        return false;
+    }
+
+    // Wait for encoder thread if any
+    if (encoder_thread_.joinable()) {
+        encoder_thread_.join();
+    }
+
+    if (!frame_.data || frame_.len == 0) {
+        ESP_LOGE(TAG, "SaveJpegToFile: no frame data");
+        return false;
+    }
+
+    bool success = false;
+
+#ifdef CONFIG_XIAOZHI_CAMERA_ALLOW_JPEG_INPUT
+    if (frame_.format == V4L2_PIX_FMT_JPEG) {
+        // Frame is already JPEG, write directly
+        FILE* file = fopen(path.c_str(), "wb");
+        if (file) {
+            size_t written = fwrite(frame_.data, 1, frame_.len, file);
+            success = (written == frame_.len);
+            fclose(file);
+        }
+    } else
+#endif
+    {
+        // Convert to JPEG using image_to_jpeg
+        uint8_t* jpeg_data = nullptr;
+        size_t jpeg_size = 0;
+        
+        bool encoded = image_to_jpeg(
+            frame_.data, frame_.len,
+            frame_.width, frame_.height,
+            frame_.format, quality,
+            &jpeg_data, &jpeg_size
+        );
+        
+        if (encoded && jpeg_data && jpeg_size > 0) {
+            FILE* file = fopen(path.c_str(), "wb");
+            if (file) {
+                size_t written = fwrite(jpeg_data, 1, jpeg_size, file);
+                success = (written == jpeg_size);
+                fclose(file);
+                ESP_LOGI(TAG, "SaveJpegToFile: saved %zu bytes to %s", jpeg_size, path.c_str());
+            } else {
+                ESP_LOGE(TAG, "SaveJpegToFile: failed to open %s for writing", path.c_str());
+            }
+            heap_caps_free(jpeg_data);
+        } else {
+            ESP_LOGE(TAG, "SaveJpegToFile: JPEG encoding failed");
+        }
+    }
+
+    return success;
+}

@@ -39,6 +39,11 @@ private:
     std::string explain_url_;
     std::string explain_token_;
     std::thread encoder_thread_;
+    
+    // Preview frame management
+    uint8_t* preview_frame_data_ = nullptr;
+    size_t preview_frame_len_ = 0;
+    bool preview_frame_locked_ = false;
 
 public:
     EspVideo(const esp_video_init_config_t& config);
@@ -50,4 +55,12 @@ public:
     virtual bool SetHMirror(bool enabled) override;
     virtual bool SetVFlip(bool enabled) override;
     virtual std::string Explain(const std::string& question);
+    
+    // Preview support
+    virtual bool GetPreviewFrame(uint8_t** data, size_t* len, uint16_t* width, uint16_t* height) override;
+    virtual void ReleasePreviewFrame() override;
+    virtual bool IsReady() const override { return streaming_on_ && video_fd_ >= 0; }
+    
+    // Save JPEG to file
+    virtual bool SaveJpegToFile(const std::string& path, int quality = 80) override;
 };

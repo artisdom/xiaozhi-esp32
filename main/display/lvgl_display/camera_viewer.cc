@@ -13,16 +13,7 @@
 #include "camera.h"
 
 #if CONFIG_IDF_TARGET_ESP32P4
-#include "esp_video.h"
-#include "esp_video_device.h"
-#include "esp_video_init.h"
-#include "linux/videodev2.h"
-#include "jpg/image_to_jpeg.h"
 #include "driver/ppa.h"
-#include <fcntl.h>
-#include <sys/ioctl.h>
-#include <sys/mman.h>
-#include <unistd.h>
 #endif
 
 static const char* TAG = "CameraViewer";
@@ -210,6 +201,14 @@ void CameraViewer::StartPreview() {
         return;
     }
     
+    // Check if board has camera
+    Camera* camera = Board::GetInstance().GetCamera();
+    if (!camera || !camera->IsReady()) {
+        ESP_LOGE(TAG, "Camera not available or not ready");
+        ShowStatus("Camera not available", 3000);
+        return;
+    }
+    
     // Allocate preview buffer if not already allocated
     if (!preview_buffer_) {
         preview_width_ = CAMERA_PREVIEW_WIDTH;
@@ -276,99 +275,10 @@ void CameraViewer::CameraTaskFunc(void* arg) {
     
     ESP_LOGI(TAG, "Camera task started");
     
-    // Open video device
-    int video_fd = open(ESP_VIDEO_MIPI_CSI_DEVICE_NAME, O_RDONLY);
-    if (video_fd < 0) {
-        ESP_LOGE(TAG, "Failed to open video device");
-        viewer->task_running_.store(false);
-        vTaskDelete(nullptr);
-        return;
-    }
-    
-    // Get current format
-    struct v4l2_format format = {};
-    format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if (ioctl(video_fd, VIDIOC_G_FMT, &format) != 0) {
-        ESP_LOGE(TAG, "VIDIOC_G_FMT failed");
-        close(video_fd);
-        viewer->task_running_.store(false);
-        vTaskDelete(nullptr);
-        return;
-    }
-    
-    // Set to RGB565 format for preview
-    format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
-    if (ioctl(video_fd, VIDIOC_S_FMT, &format) != 0) {
-        ESP_LOGE(TAG, "VIDIOC_S_FMT failed");
-        close(video_fd);
-        viewer->task_running_.store(false);
-        vTaskDelete(nullptr);
-        return;
-    }
-    
-    uint32_t cam_width = format.fmt.pix.width;
-    uint32_t cam_height = format.fmt.pix.height;
-    ESP_LOGI(TAG, "Camera resolution: %lux%lu", cam_width, cam_height);
-    
-    // Request buffers
-    struct v4l2_requestbuffers req = {};
-    req.count = 2;
-    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    req.memory = V4L2_MEMORY_MMAP;
-    if (ioctl(video_fd, VIDIOC_REQBUFS, &req) != 0) {
-        ESP_LOGE(TAG, "VIDIOC_REQBUFS failed");
-        close(video_fd);
-        viewer->task_running_.store(false);
-        vTaskDelete(nullptr);
-        return;
-    }
-    
-    // Map buffers
-    struct MmapBuffer { void* start; size_t length; };
-    MmapBuffer mmap_buffers[2] = {};
-    
-    for (int i = 0; i < 2; i++) {
-        struct v4l2_buffer buf = {};
-        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buf.memory = V4L2_MEMORY_MMAP;
-        buf.index = i;
-        
-        if (ioctl(video_fd, VIDIOC_QUERYBUF, &buf) != 0) {
-            ESP_LOGE(TAG, "VIDIOC_QUERYBUF failed for buffer %d", i);
-            close(video_fd);
-            viewer->task_running_.store(false);
-            vTaskDelete(nullptr);
-            return;
-        }
-        
-        mmap_buffers[i].start = mmap(nullptr, buf.length, PROT_READ | PROT_WRITE, 
-                                      MAP_SHARED, video_fd, buf.m.offset);
-        mmap_buffers[i].length = buf.length;
-        
-        if (mmap_buffers[i].start == MAP_FAILED) {
-            ESP_LOGE(TAG, "mmap failed for buffer %d", i);
-            close(video_fd);
-            viewer->task_running_.store(false);
-            vTaskDelete(nullptr);
-            return;
-        }
-        
-        // Queue buffer
-        if (ioctl(video_fd, VIDIOC_QBUF, &buf) != 0) {
-            ESP_LOGE(TAG, "VIDIOC_QBUF failed for buffer %d", i);
-        }
-    }
-    
-    // Start streaming
-    int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if (ioctl(video_fd, VIDIOC_STREAMON, &type) != 0) {
-        ESP_LOGE(TAG, "VIDIOC_STREAMON failed");
-        for (int i = 0; i < 2; i++) {
-            if (mmap_buffers[i].start) {
-                munmap(mmap_buffers[i].start, mmap_buffers[i].length);
-            }
-        }
-        close(video_fd);
+    // Get camera from board
+    Camera* camera = Board::GetInstance().GetCamera();
+    if (!camera || !camera->IsReady()) {
+        ESP_LOGE(TAG, "Camera not available");
         viewer->task_running_.store(false);
         vTaskDelete(nullptr);
         return;
@@ -414,12 +324,13 @@ void CameraViewer::CameraTaskFunc(void* arg) {
             continue;
         }
         
-        // Dequeue buffer
-        struct v4l2_buffer buf = {};
-        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buf.memory = V4L2_MEMORY_MMAP;
+        // Get frame from board's camera
+        uint8_t* frame_data = nullptr;
+        size_t frame_len = 0;
+        uint16_t frame_width = 0;
+        uint16_t frame_height = 0;
         
-        if (ioctl(video_fd, VIDIOC_DQBUF, &buf) != 0) {
+        if (!camera->GetPreviewFrame(&frame_data, &frame_len, &frame_width, &frame_height)) {
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
@@ -428,41 +339,27 @@ void CameraViewer::CameraTaskFunc(void* arg) {
         if (viewer->is_capturing_.load()) {
             viewer->is_capturing_.store(false);
             
-            // Convert frame to JPEG and save
-            uint8_t* jpeg_data = nullptr;
-            size_t jpeg_size = 0;
+            // Save photo using camera's SaveJpegToFile
+            std::string filename = viewer->GeneratePhotoFilename();
+            std::string filepath = std::string(CAMERA_FOLDER) + "/" + filename;
             
-            // Use image_to_jpeg to encode
-            // RGB565 format: 2 bytes per pixel
-            size_t src_len = cam_width * cam_height * 2;
-            bool success = image_to_jpeg((uint8_t*)mmap_buffers[buf.index].start,
-                                          src_len,
-                                          cam_width, cam_height,
-                                          V4L2_PIX_FMT_RGB565,
-                                          80,  // quality
-                                          &jpeg_data, &jpeg_size);
-            
-            if (success && jpeg_data && jpeg_size > 0) {
-                if (viewer->SaveJpegToSdCard(jpeg_data, jpeg_size)) {
-                    viewer->ShowStatus("Photo saved!", 2000);
-                } else {
-                    viewer->ShowStatus("Failed to save photo", 2000);
-                }
-                heap_caps_free(jpeg_data);
+            if (camera->SaveJpegToFile(filepath, 90)) {
+                viewer->ShowStatus("Photo saved!", 2000);
+                ESP_LOGI(TAG, "Photo saved: %s", filepath.c_str());
             } else {
-                ESP_LOGE(TAG, "Failed to encode JPEG");
-                viewer->ShowStatus("Failed to encode photo", 2000);
+                viewer->ShowStatus("Failed to save photo", 2000);
+                ESP_LOGE(TAG, "Failed to save photo");
             }
         }
         
         // Scale/rotate frame to preview buffer using PPA
-        if (ppa_handle && viewer->preview_buffer_) {
+        if (ppa_handle && viewer->preview_buffer_ && frame_data) {
             ppa_srm_oper_config_t srm_config = {};
-            srm_config.in.buffer = mmap_buffers[buf.index].start;
-            srm_config.in.pic_w = cam_width;
-            srm_config.in.pic_h = cam_height;
-            srm_config.in.block_w = cam_width;
-            srm_config.in.block_h = cam_height;
+            srm_config.in.buffer = frame_data;
+            srm_config.in.pic_w = frame_width;
+            srm_config.in.pic_h = frame_height;
+            srm_config.in.block_w = frame_width;
+            srm_config.in.block_h = frame_height;
             srm_config.in.block_offset_x = 0;
             srm_config.in.block_offset_y = 0;
             srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
@@ -475,9 +372,14 @@ void CameraViewer::CameraTaskFunc(void* arg) {
             srm_config.out.block_offset_y = 0;
             srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
             
+            // Calculate scaling factors
+            float scale_x = (float)viewer->preview_width_ / frame_width;
+            float scale_y = (float)viewer->preview_height_ / frame_height;
+            float scale = (scale_x < scale_y) ? scale_x : scale_y;  // Fit to preview
+            
             srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
-            srm_config.scale_x = 1.0f;
-            srm_config.scale_y = 1.0f;
+            srm_config.scale_x = scale;
+            srm_config.scale_y = scale;
             srm_config.mirror_x = true;  // Mirror for selfie view
             srm_config.mirror_y = false;
             srm_config.rgb_swap = false;
@@ -490,10 +392,8 @@ void CameraViewer::CameraTaskFunc(void* arg) {
             lv_obj_invalidate(viewer->preview_canvas_);
         }
         
-        // Re-queue buffer
-        if (ioctl(video_fd, VIDIOC_QBUF, &buf) != 0) {
-            ESP_LOGE(TAG, "VIDIOC_QBUF failed");
-        }
+        // Release the frame back to camera
+        camera->ReleasePreviewFrame();
         
         vTaskDelay(pdMS_TO_TICKS(16)); // ~60fps target
     }
@@ -501,20 +401,10 @@ void CameraViewer::CameraTaskFunc(void* arg) {
     // Cleanup
     ESP_LOGI(TAG, "Camera task exiting");
     
-    type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    ioctl(video_fd, VIDIOC_STREAMOFF, &type);
-    
     if (ppa_handle) {
         ppa_unregister_client(ppa_handle);
     }
     
-    for (int i = 0; i < 2; i++) {
-        if (mmap_buffers[i].start && mmap_buffers[i].start != MAP_FAILED) {
-            munmap(mmap_buffers[i].start, mmap_buffers[i].length);
-        }
-    }
-    
-    close(video_fd);
     viewer->task_running_.store(false);
     vTaskDelete(nullptr);
 }
@@ -534,32 +424,6 @@ bool CameraViewer::TakePhoto() {
     ESP_LOGW(TAG, "Camera not supported on this platform");
     return false;
 #endif
-}
-
-bool CameraViewer::SaveJpegToSdCard(uint8_t* jpeg_data, size_t jpeg_size) {
-    if (!jpeg_data || jpeg_size == 0) {
-        return false;
-    }
-    
-    std::string filename = GeneratePhotoFilename();
-    std::string filepath = std::string(CAMERA_FOLDER) + "/" + filename;
-    
-    FILE* f = fopen(filepath.c_str(), "wb");
-    if (!f) {
-        ESP_LOGE(TAG, "Failed to open file for writing: %s", filepath.c_str());
-        return false;
-    }
-    
-    size_t written = fwrite(jpeg_data, 1, jpeg_size, f);
-    fclose(f);
-    
-    if (written != jpeg_size) {
-        ESP_LOGE(TAG, "Failed to write all data: wrote %zu of %zu bytes", written, jpeg_size);
-        return false;
-    }
-    
-    ESP_LOGI(TAG, "Photo saved: %s (%zu bytes)", filepath.c_str(), jpeg_size);
-    return true;
 }
 
 std::string CameraViewer::GeneratePhotoFilename() {

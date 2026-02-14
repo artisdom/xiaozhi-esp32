@@ -163,12 +163,14 @@ Communication with AI backend uses:
 
 ### Building
 ```bash
+First load ESP-IDF build enviroment.
+
 source ~/.espressif/tools/activate_idf_v5.5.2.sh
 
-# 1. Incremental build (fast)
+# Option 1. Incremental build (fast)
 $IDF_PATH/tools/idf.py -DBOARD_NAME="m5stack-tab5" -DBOARD_TYPE="m5stack-tab5" build
 
-# 2. Fresh build using ESP-IDF build system for the "M5Stack Tab5" board
+# Option 2. Fresh build using ESP-IDF build system for the "M5Stack Tab5" board
 $IDF_PATH/tools/idf.py set-target esp32p4
 
 Append the following "CONFIG" to `sdkconfig`:
@@ -186,7 +188,7 @@ CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=8
 # Then run:
 $IDF_PATH/tools/idf.py -DBOARD_NAME="m5stack-tab5" -DBOARD_TYPE="m5stack-tab5" build
 
-# 3. Or use release script for "M5Stack Tab5" board
+# Option 3. Or use release script for "M5Stack Tab5" board
 python scripts/release.py m5stack-tab5
 ```
 
