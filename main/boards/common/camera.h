@@ -18,6 +18,7 @@ public:
     virtual bool GetPreviewFrame(uint8_t** data, size_t* len, uint16_t* width, uint16_t* height) { return false; }
     virtual void ReleasePreviewFrame() {}
     virtual bool IsReady() const { return false; }
+    virtual uint32_t GetSensorFormat() const { return 0; }
     
     // Save captured frame to file
     virtual bool SaveJpegToFile(const std::string& path, int quality = 80) { return false; }

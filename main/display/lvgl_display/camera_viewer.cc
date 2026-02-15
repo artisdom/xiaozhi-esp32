@@ -16,6 +16,7 @@
 
 #if CONFIG_IDF_TARGET_ESP32P4
 #include "driver/ppa.h"
+#include <linux/videodev2.h>
 #endif
 
 static const char* TAG = "CameraViewer";
@@ -374,6 +375,21 @@ void CameraViewer::CameraTaskFunc(void* arg) {
         
         // Scale/rotate frame to preview buffer using PPA
         if (ppa_handle && viewer->preview_buffer_ && frame_data) {
+            // Determine input color mode based on sensor format
+            uint32_t sensor_format = camera->GetSensorFormat();
+            ppa_srm_color_mode_t input_cm = PPA_SRM_COLOR_MODE_RGB565;
+            switch (sensor_format) {
+                case V4L2_PIX_FMT_RGB24:
+                    input_cm = PPA_SRM_COLOR_MODE_RGB888;
+                    break;
+                case V4L2_PIX_FMT_RGB565:
+                    input_cm = PPA_SRM_COLOR_MODE_RGB565;
+                    break;
+                default:
+                    ESP_LOGW(TAG, "Unknown sensor format 0x%08lx, assuming RGB565", sensor_format);
+                    break;
+            }
+            
             ppa_srm_oper_config_t srm_config = {};
             srm_config.in.buffer = frame_data;
             srm_config.in.pic_w = frame_width;
@@ -382,7 +398,7 @@ void CameraViewer::CameraTaskFunc(void* arg) {
             srm_config.in.block_h = frame_height;
             srm_config.in.block_offset_x = 0;
             srm_config.in.block_offset_y = 0;
-            srm_config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
+            srm_config.in.srm_cm = input_cm;
             
             srm_config.out.buffer = viewer->preview_buffer_;
             srm_config.out.buffer_size = viewer->preview_buffer_size_;

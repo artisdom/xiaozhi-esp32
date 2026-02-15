@@ -60,6 +60,7 @@ public:
     virtual bool GetPreviewFrame(uint8_t** data, size_t* len, uint16_t* width, uint16_t* height) override;
     virtual void ReleasePreviewFrame() override;
     virtual bool IsReady() const override { return streaming_on_ && video_fd_ >= 0; }
+    virtual uint32_t GetSensorFormat() const override { return sensor_format_; }
     
     // Save JPEG to file
     virtual bool SaveJpegToFile(const std::string& path, int quality = 80) override;
