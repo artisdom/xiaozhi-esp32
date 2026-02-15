@@ -1387,6 +1387,14 @@ void LcdDisplay::SetupFileBrowser() {
     image_viewer_->SetCloseCallback(show_browser);
     audio_player_->SetCloseCallback(show_browser);
     video_player_->SetCloseCallback(show_browser);
+    
+    // Set gallery callback for camera viewer to open file browser to Camera folder
+    camera_viewer_->SetGalleryCallback([this](const std::string& path) {
+        if (file_browser_) {
+            ESP_LOGI(TAG, "Opening gallery at: %s", path.c_str());
+            file_browser_->Show(path);
+        }
+    });
 }
 
 void LcdDisplay::OnFileBrowserFileSelected(const std::string& path, int file_type) {

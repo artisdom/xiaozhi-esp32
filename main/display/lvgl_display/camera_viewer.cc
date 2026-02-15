@@ -372,7 +372,8 @@ void CameraViewer::CameraTaskFunc(void* arg) {
             std::string filepath = std::string(CAMERA_FOLDER) + "/" + filename;
             
             if (camera->SaveJpegToFile(filepath, 90)) {
-                viewer->ShowStatus("Photo saved!", 2000);
+                std::string msg = "Saved: " + filename;
+                viewer->ShowStatus(msg.c_str(), 2000);
                 ESP_LOGI(TAG, "Photo saved: %s", filepath.c_str());
             } else {
                 viewer->ShowStatus("Failed to save photo", 2000);
@@ -539,8 +540,11 @@ void CameraViewer::OnGalleryButtonClicked(lv_event_t* e) {
     CameraViewer* viewer = static_cast<CameraViewer*>(lv_event_get_user_data(e));
     if (viewer) {
         ESP_LOGI(TAG, "Gallery button clicked - navigating to Camera folder");
-        // TODO: Integrate with file browser to show Camera folder
-        // For now, just show a status message
-        viewer->ShowStatus("Open SD Card > Camera", 2000);
+        if (viewer->gallery_callback_) {
+            viewer->Hide();  // Close camera viewer first
+            viewer->gallery_callback_(CAMERA_FOLDER);
+        } else {
+            viewer->ShowStatus("Gallery not available", 2000);
+        }
     }
 }

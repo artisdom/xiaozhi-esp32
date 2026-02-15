@@ -20,6 +20,7 @@ class Camera;
 class CameraViewer {
 public:
     using CloseCallback = std::function<void()>;
+    using GalleryCallback = std::function<void(const std::string& path)>;
 
     CameraViewer();
     ~CameraViewer();
@@ -53,6 +54,14 @@ public:
     }
 
     /**
+     * @brief Set callback for when gallery button is clicked
+     * @param callback Function to call with the Camera folder path
+     */
+    void SetGalleryCallback(GalleryCallback callback) {
+        gallery_callback_ = callback;
+    }
+
+    /**
      * @brief Take a photo and save to SD card
      * @return true if photo was saved successfully
      */
@@ -81,6 +90,7 @@ private:
     std::atomic<bool> is_capturing_{false};
     std::atomic<bool> task_running_{false};
     CloseCallback close_callback_;
+    GalleryCallback gallery_callback_;
     
     // Camera task
     TaskHandle_t camera_task_handle_ = nullptr;
