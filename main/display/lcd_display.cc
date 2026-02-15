@@ -21,6 +21,7 @@
 #include "lvgl_display/file_browser.h"
 #include "lvgl_display/file_viewer.h"
 #include "lvgl_display/camera_viewer.h"
+#include "lvgl_display/audio_recorder.h"
 #endif
 
 #define TAG "LcdDisplay"
@@ -1013,6 +1014,37 @@ void LcdDisplay::SetupUI() {
         ESP_LOGI(TAG, "Calling camera_viewer_->Show()");
         display->camera_viewer_->Show();
     }, LV_EVENT_CLICKED, this);
+
+    // Microphone button (left of Camera button)
+    microphone_btn_ = lv_btn_create(toolbar_);
+    lv_obj_set_size(microphone_btn_, 88, 88);
+    lv_obj_set_style_bg_color(microphone_btn_, lv_color_hex(0x3a3a5e), 0);
+    lv_obj_set_style_bg_opa(microphone_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(microphone_btn_, 8, 0);
+    lv_obj_set_style_border_width(microphone_btn_, 0, 0);
+    lv_obj_set_style_pad_all(microphone_btn_, 0, 0);
+    lv_obj_align_to(microphone_btn_, camera_btn_, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+    
+    lv_obj_t* microphone_label = lv_label_create(microphone_btn_);
+    lv_label_set_text(microphone_label, FONT_AWESOME_MICROPHONE);
+    lv_obj_set_style_text_font(microphone_label, icon_font, 0);
+    lv_obj_set_style_text_color(microphone_label, lv_color_white(), 0);
+    lv_obj_center(microphone_label);
+    
+    lv_obj_add_event_cb(microphone_btn_, [](lv_event_t* e) {
+        ESP_LOGI(TAG, "Microphone button clicked");
+        LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
+        if (display == nullptr) {
+            ESP_LOGE(TAG, "Display pointer is null");
+            return;
+        }
+        if (display->audio_recorder_ == nullptr) {
+            ESP_LOGE(TAG, "Audio recorder is null - not initialized yet");
+            return;
+        }
+        ESP_LOGI(TAG, "Calling audio_recorder_->Show()");
+        display->audio_recorder_->Show();
+    }, LV_EVENT_CLICKED, this);
 #endif
 
     /* Top layer: Bottom bar - fixed height at bottom */
@@ -1363,6 +1395,7 @@ void LcdDisplay::SetupFileBrowser() {
     audio_player_ = new AudioPlayer();
     video_player_ = new VideoPlayer();
     camera_viewer_ = new CameraViewer();
+    audio_recorder_ = new AudioRecorder();
     
     // Initialize all viewers
     file_browser_->Init();
@@ -1371,6 +1404,7 @@ void LcdDisplay::SetupFileBrowser() {
     audio_player_->Init();
     video_player_->Init();
     camera_viewer_->Init();
+    audio_recorder_->Init();
     
     // Set file selection callback
     file_browser_->SetFileSelectedCallback([this](const std::string& path, FileType type) {
@@ -1405,6 +1439,26 @@ void LcdDisplay::SetupFileBrowser() {
                 });
             });
             image_viewer_->Open(path);
+        }
+    });
+
+    // Set play callback for audio recorder to play recordings
+    audio_recorder_->SetPlayCallback([this](const std::string& path) {
+        if (audio_player_) {
+            ESP_LOGI(TAG, "Playing recording from audio recorder: %s", path.c_str());
+            // Override close callback to return to audio recorder instead of file browser
+            audio_player_->SetCloseCallback([this]() {
+                if (audio_recorder_) {
+                    audio_recorder_->Show();
+                }
+                // Restore the default close callback for file browser navigation
+                audio_player_->SetCloseCallback([this]() {
+                    if (file_browser_) {
+                        file_browser_->Show(file_browser_->GetCurrentPath());
+                    }
+                });
+            });
+            audio_player_->Open(path);
         }
     });
 }

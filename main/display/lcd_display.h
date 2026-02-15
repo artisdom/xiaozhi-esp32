@@ -18,6 +18,7 @@ class ImageViewer;
 class AudioPlayer;
 class VideoPlayer;
 class CameraViewer;
+class AudioRecorder;
 #endif
 
 #define PREVIEW_IMAGE_DURATION_MS 5000
@@ -49,12 +50,14 @@ protected:
 #if CONFIG_IDF_TARGET_ESP32P4
     lv_obj_t* file_browser_btn_ = nullptr;
     lv_obj_t* camera_btn_ = nullptr;
+    lv_obj_t* microphone_btn_ = nullptr;
     FileBrowser* file_browser_ = nullptr;
     TextFileViewer* text_viewer_ = nullptr;
     ImageViewer* image_viewer_ = nullptr;
     AudioPlayer* audio_player_ = nullptr;
     VideoPlayer* video_player_ = nullptr;
     CameraViewer* camera_viewer_ = nullptr;
+    AudioRecorder* audio_recorder_ = nullptr;
     
     void SetupFileBrowser();
     void OnFileBrowserFileSelected(const std::string& path, int file_type);
