@@ -1391,7 +1391,19 @@ void LcdDisplay::SetupFileBrowser() {
     // Set gallery callback for camera viewer to open the latest photo
     camera_viewer_->SetGalleryCallback([this](const std::string& path) {
         if (image_viewer_) {
-            ESP_LOGI(TAG, "Opening photo: %s", path.c_str());
+            ESP_LOGI(TAG, "Opening photo from camera: %s", path.c_str());
+            // Override close callback to return to camera viewer instead of file browser
+            image_viewer_->SetCloseCallback([this]() {
+                if (camera_viewer_) {
+                    camera_viewer_->Show();
+                }
+                // Restore the default close callback for file browser navigation
+                image_viewer_->SetCloseCallback([this]() {
+                    if (file_browser_) {
+                        file_browser_->Show(file_browser_->GetCurrentPath());
+                    }
+                });
+            });
             image_viewer_->Open(path);
         }
     });
