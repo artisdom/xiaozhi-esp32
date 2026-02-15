@@ -27,11 +27,11 @@ static const char* TAG = "CameraViewer";
 // Full camera resolution is still used for photo capture
 // For portrait displays with rotation, swap width/height
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-#define CAMERA_PREVIEW_WIDTH  320
-#define CAMERA_PREVIEW_HEIGHT 480
-#else
 #define CAMERA_PREVIEW_WIDTH  480
-#define CAMERA_PREVIEW_HEIGHT 320
+#define CAMERA_PREVIEW_HEIGHT 720
+#else
+#define CAMERA_PREVIEW_WIDTH  720
+#define CAMERA_PREVIEW_HEIGHT 480
 #endif
 
 // SD card camera folder
@@ -250,7 +250,9 @@ void CameraViewer::StartPreview() {
                          preview_width_, preview_height_, 
                          LV_COLOR_FORMAT_RGB565);
     
-    // Re-center canvas after buffer is set (buffer changes canvas size)
+    // Set canvas size and center it
+    lv_obj_set_size(preview_canvas_, preview_width_, preview_height_);
+    lv_obj_update_layout(preview_canvas_);
     lv_obj_align(preview_canvas_, LV_ALIGN_CENTER, 0, 0);
     
     // Create camera task
