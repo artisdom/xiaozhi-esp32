@@ -25,11 +25,11 @@ static const char* TAG = "CameraViewer";
 // Full camera resolution is still used for photo capture
 // For portrait displays with rotation, swap width/height
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-#define CAMERA_PREVIEW_WIDTH  320
-#define CAMERA_PREVIEW_HEIGHT 480
+#define CAMERA_PREVIEW_WIDTH  640
+#define CAMERA_PREVIEW_HEIGHT 960
 #else
-#define CAMERA_PREVIEW_WIDTH  480
-#define CAMERA_PREVIEW_HEIGHT 320
+#define CAMERA_PREVIEW_WIDTH  960
+#define CAMERA_PREVIEW_HEIGHT 640
 #endif
 
 // SD card camera folder
