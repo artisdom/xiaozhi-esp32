@@ -14,6 +14,8 @@
 #include "board.h"
 #include "camera.h"
 
+#include <esp_lvgl_port.h>
+
 #if CONFIG_IDF_TARGET_ESP32P4
 #include "driver/ppa.h"
 #include <linux/videodev2.h>
@@ -25,11 +27,11 @@ static const char* TAG = "CameraViewer";
 // Full camera resolution is still used for photo capture
 // For portrait displays with rotation, swap width/height
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-#define CAMERA_PREVIEW_WIDTH  480
-#define CAMERA_PREVIEW_HEIGHT 720
-#else
-#define CAMERA_PREVIEW_WIDTH  720
+#define CAMERA_PREVIEW_WIDTH  320
 #define CAMERA_PREVIEW_HEIGHT 480
+#else
+#define CAMERA_PREVIEW_WIDTH  480
+#define CAMERA_PREVIEW_HEIGHT 320
 #endif
 
 // SD card camera folder
@@ -440,7 +442,11 @@ void CameraViewer::CameraTaskFunc(void* arg) {
             }
             
             // Update LVGL canvas - just mark dirty, LVGL will refresh
-            lv_obj_invalidate(viewer->preview_canvas_);
+            // Must lock LVGL before calling LVGL APIs from non-LVGL task
+            if (lvgl_port_lock(10)) {
+                lv_obj_invalidate(viewer->preview_canvas_);
+                lvgl_port_unlock();
+            }
         }
         
         // Release the frame back to camera
