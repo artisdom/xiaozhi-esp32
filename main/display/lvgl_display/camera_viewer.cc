@@ -248,6 +248,9 @@ void CameraViewer::StartPreview() {
                          preview_width_, preview_height_, 
                          LV_COLOR_FORMAT_RGB565);
     
+    // Re-center canvas after buffer is set (buffer changes canvas size)
+    lv_obj_align(preview_canvas_, LV_ALIGN_CENTER, 0, 0);
+    
     // Create camera task
     xTaskCreatePinnedToCore(CameraTaskFunc, "camera_preview", 
                             CAMERA_TASK_STACK_SIZE, this, 
