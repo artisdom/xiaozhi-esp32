@@ -29,7 +29,7 @@ static const char* TAG = "CameraViewer";
 #define CAMERA_FOLDER "/sdcard/Camera"
 
 // Task configuration
-#define CAMERA_TASK_STACK_SIZE (8 * 1024)
+#define CAMERA_TASK_STACK_SIZE (16 * 1024)  // Increased for JPEG encoding
 #define CAMERA_TASK_PRIORITY   3  // Lower priority to not starve LCD refresh
 #define COMMAND_QUEUE_SIZE     10
 #define CAMERA_FRAME_DELAY_MS  50  // ~20fps to reduce PSRAM bandwidth usage

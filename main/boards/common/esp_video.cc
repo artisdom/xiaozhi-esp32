@@ -1122,6 +1122,15 @@ bool EspVideo::SaveJpegToFile(const std::string& path, int quality) {
         return false;
     }
 
+    // Validate frame dimensions
+    if (frame_.width == 0 || frame_.height == 0) {
+        ESP_LOGE(TAG, "SaveJpegToFile: invalid frame dimensions %dx%d", frame_.width, frame_.height);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "SaveJpegToFile: frame %dx%d, format=0x%lx, len=%zu", 
+             frame_.width, frame_.height, (unsigned long)frame_.format, frame_.len);
+
     bool success = false;
 
 #ifdef CONFIG_XIAOZHI_CAMERA_ALLOW_JPEG_INPUT
@@ -1132,6 +1141,7 @@ bool EspVideo::SaveJpegToFile(const std::string& path, int quality) {
             size_t written = fwrite(frame_.data, 1, frame_.len, file);
             success = (written == frame_.len);
             fclose(file);
+            ESP_LOGI(TAG, "SaveJpegToFile: wrote JPEG directly, %zu bytes", frame_.len);
         }
     } else
 #endif
@@ -1153,14 +1163,15 @@ bool EspVideo::SaveJpegToFile(const std::string& path, int quality) {
                 size_t written = fwrite(jpeg_data, 1, jpeg_size, file);
                 success = (written == jpeg_size);
                 fclose(file);
-                ESP_LOGI(TAG, "SaveJpegToFile: saved %zu bytes to %s", jpeg_size, path.c_str());
+                ESP_LOGI(TAG, "SaveJpegToFile: encoded and saved %zu bytes", jpeg_size);
             } else {
                 ESP_LOGE(TAG, "SaveJpegToFile: failed to open %s for writing, errno=%d (%s)", 
                          path.c_str(), errno, strerror(errno));
             }
             heap_caps_free(jpeg_data);
         } else {
-            ESP_LOGE(TAG, "SaveJpegToFile: JPEG encoding failed");
+            ESP_LOGE(TAG, "SaveJpegToFile: JPEG encoding failed (encoded=%d, data=%p, size=%zu)",
+                     encoded, (void*)jpeg_data, jpeg_size);
         }
     }
 
