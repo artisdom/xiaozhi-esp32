@@ -1085,9 +1085,10 @@ bool EspVideo::GetPreviewFrame(uint8_t** data, size_t* len, uint16_t* width, uin
 
     *data = preview_frame_data_;
     *len = needed_size;
+    // Return actual sensor dimensions (data is not rotated in preview buffer)
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-    *width = sensor_height_;
-    *height = sensor_width_;
+    *width = sensor_width_;
+    *height = sensor_height_;
 #else
     *width = frame_.width;
     *height = frame_.height;

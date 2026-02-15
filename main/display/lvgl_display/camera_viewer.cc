@@ -22,8 +22,14 @@ static const char* TAG = "CameraViewer";
 
 // Camera preview resolution - kept small to avoid DSI underrun
 // Full camera resolution is still used for photo capture
+// For portrait displays with rotation, swap width/height
+#ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
+#define CAMERA_PREVIEW_WIDTH  320
+#define CAMERA_PREVIEW_HEIGHT 480
+#else
 #define CAMERA_PREVIEW_WIDTH  480
 #define CAMERA_PREVIEW_HEIGHT 320
+#endif
 
 // SD card camera folder
 #define CAMERA_FOLDER "/sdcard/Camera"
@@ -386,12 +392,21 @@ void CameraViewer::CameraTaskFunc(void* arg) {
             srm_config.out.block_offset_y = 0;
             srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
             
-            // Calculate scaling factors
+            // For portrait display, rotate 90° and calculate scale based on rotated dimensions
+            // Camera is landscape (1280x720), preview is portrait (320x480)
+#ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
+            // After 90° rotation, effective input becomes frame_height x frame_width
+            float scale_x = (float)viewer->preview_width_ / frame_height;
+            float scale_y = (float)viewer->preview_height_ / frame_width;
+            float scale = (scale_x < scale_y) ? scale_x : scale_y;
+            srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_90;
+#else
             float scale_x = (float)viewer->preview_width_ / frame_width;
             float scale_y = (float)viewer->preview_height_ / frame_height;
-            float scale = (scale_x < scale_y) ? scale_x : scale_y;  // Fit to preview
-            
+            float scale = (scale_x < scale_y) ? scale_x : scale_y;
             srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
+#endif
+            
             srm_config.scale_x = scale;
             srm_config.scale_y = scale;
             srm_config.mirror_x = true;  // Mirror for selfie view
@@ -400,7 +415,10 @@ void CameraViewer::CameraTaskFunc(void* arg) {
             srm_config.byte_swap = false;
             srm_config.mode = PPA_TRANS_MODE_BLOCKING;
             
-            ppa_do_scale_rotate_mirror(ppa_handle, &srm_config);
+            esp_err_t err = ppa_do_scale_rotate_mirror(ppa_handle, &srm_config);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "PPA failed: %s", esp_err_to_name(err));
+            }
             
             // Update LVGL canvas
             lv_obj_invalidate(viewer->preview_canvas_);
