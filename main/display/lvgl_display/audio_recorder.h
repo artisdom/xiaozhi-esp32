@@ -125,6 +125,7 @@ private:
     // Recording buffer
     FILE* recording_file_ = nullptr;
     size_t samples_recorded_ = 0;
+    int recording_sample_rate_ = 0;  // Actual sample rate from codec
 
     // Internal methods
     void CreateUI(lv_obj_t* parent);

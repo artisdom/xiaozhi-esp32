@@ -21,9 +21,7 @@ static const char* TAG = "AudioRecorder";
 // SD card recording folder
 #define RECORDING_FOLDER "/sdcard/Recording"
 
-// Recording parameters
-#define RECORDING_SAMPLE_RATE 16000
-#define RECORDING_CHANNELS 1
+// Recording parameters - will use codec's actual sample rate
 #define RECORDING_BITS_PER_SAMPLE 16
 
 // Task configuration
@@ -520,6 +518,21 @@ bool AudioRecorder::StartRecording() {
         return false;
     }
     
+    // Get codec to determine sample rate
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (!codec) {
+        ESP_LOGE(TAG, "Audio codec not available");
+        ShowStatus("No audio codec", 3000);
+        return false;
+    }
+    
+    // Use codec's actual sample rate - always record mono for simplicity
+    recording_sample_rate_ = codec->input_sample_rate();
+    int recording_channels = 1;
+    
+    ESP_LOGI(TAG, "Recording at %d Hz, mono (codec input: %d ch)", 
+             recording_sample_rate_, codec->input_channels());
+    
     // Generate filename and open file
     std::string filename = GenerateRecordingFilename();
     current_recording_path_ = std::string(RECORDING_FOLDER) + "/" + filename;
@@ -531,8 +544,8 @@ bool AudioRecorder::StartRecording() {
         return false;
     }
     
-    // Write WAV header
-    if (!WriteWavHeader(recording_file_, RECORDING_SAMPLE_RATE, RECORDING_CHANNELS, RECORDING_BITS_PER_SAMPLE)) {
+    // Write WAV header with actual sample rate
+    if (!WriteWavHeader(recording_file_, recording_sample_rate_, recording_channels, RECORDING_BITS_PER_SAMPLE)) {
         ESP_LOGE(TAG, "Failed to write WAV header");
         fclose(recording_file_);
         recording_file_ = nullptr;
@@ -649,7 +662,15 @@ void AudioRecorder::RecordingTaskFunc(void* arg) {
     
     bool recording = false;
     std::vector<int16_t> audio_buffer;
-    int samples_per_read = RECORDING_SAMPLE_RATE * RECORDING_READ_INTERVAL_MS / 1000;
+    
+    // Calculate samples per read based on codec's actual sample rate
+    int codec_sample_rate = codec->input_sample_rate();
+    int codec_channels = codec->input_channels();
+    bool has_reference = codec->input_reference();  // True if second channel is reference for AEC
+    int samples_per_read = codec_sample_rate * RECORDING_READ_INTERVAL_MS / 1000;
+    
+    ESP_LOGI(TAG, "Codec: sample_rate=%d, channels=%d, has_reference=%d, samples_per_read=%d", 
+             codec_sample_rate, codec_channels, has_reference, samples_per_read);
     
     while (true) {
         RecordCommand cmd = RecordCommand::NONE;
@@ -683,24 +704,37 @@ void AudioRecorder::RecordingTaskFunc(void* arg) {
         }
         
         if (recording && recorder->recording_file_) {
-            // Read audio data
-            audio_buffer.resize(samples_per_read * codec->input_channels());
+            // Read audio data - buffer size = samples * channels
+            audio_buffer.resize(samples_per_read * codec_channels);
             if (codec->InputData(audio_buffer)) {
-                // If stereo, convert to mono (take left channel)
-                if (codec->input_channels() == 2) {
-                    for (size_t i = 0, j = 0; i < audio_buffer.size() / 2; i++, j += 2) {
-                        audio_buffer[i] = audio_buffer[j];
+                // Convert to mono if stereo
+                if (codec_channels == 2) {
+                    size_t mono_size = audio_buffer.size() / 2;
+                    if (has_reference) {
+                        // Second channel is reference (for AEC), only take first channel (microphone)
+                        for (size_t i = 0, j = 0; i < mono_size; i++, j += 2) {
+                            audio_buffer[i] = audio_buffer[j];
+                        }
+                    } else {
+                        // True stereo - average both channels
+                        for (size_t i = 0, j = 0; i < mono_size; i++, j += 2) {
+                            int32_t sum = (int32_t)audio_buffer[j] + (int32_t)audio_buffer[j + 1];
+                            audio_buffer[i] = (int16_t)(sum / 2);
+                        }
                     }
-                    audio_buffer.resize(audio_buffer.size() / 2);
+                    audio_buffer.resize(mono_size);
                 }
                 
                 // Write to file
                 size_t written = fwrite(audio_buffer.data(), sizeof(int16_t), 
                                        audio_buffer.size(), recorder->recording_file_);
                 if (written != audio_buffer.size()) {
-                    ESP_LOGE(TAG, "Failed to write audio data");
+                    ESP_LOGE(TAG, "Failed to write audio data: wrote %zu of %zu",
+                             written, audio_buffer.size());
                 }
                 recorder->samples_recorded_ += written;
+            } else {
+                ESP_LOGW(TAG, "Failed to read audio data from codec");
             }
             
             vTaskDelay(pdMS_TO_TICKS(RECORDING_READ_INTERVAL_MS));
