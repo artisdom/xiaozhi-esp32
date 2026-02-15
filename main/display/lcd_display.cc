@@ -954,7 +954,7 @@ void LcdDisplay::SetupUI() {
 
     // SD card file browser button (top right of toolbar)
     file_browser_btn_ = lv_btn_create(toolbar_);
-    lv_obj_set_size(file_browser_btn_, 44, 44);
+    lv_obj_set_size(file_browser_btn_, 88, 88);
     lv_obj_set_style_bg_color(file_browser_btn_, lv_color_hex(0x3a3a5e), 0);
     lv_obj_set_style_bg_opa(file_browser_btn_, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(file_browser_btn_, 8, 0);
@@ -985,7 +985,7 @@ void LcdDisplay::SetupUI() {
 
     // Camera button (left of SD card button)
     camera_btn_ = lv_btn_create(toolbar_);
-    lv_obj_set_size(camera_btn_, 44, 44);
+    lv_obj_set_size(camera_btn_, 88, 88);
     lv_obj_set_style_bg_color(camera_btn_, lv_color_hex(0x3a3a5e), 0);
     lv_obj_set_style_bg_opa(camera_btn_, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(camera_btn_, 8, 0);
