@@ -20,6 +20,7 @@
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32P4)
 #define AUDIO_PLAYER_SUPPORTED 1
 #include <audio_player.h>
+#include <esp_lvgl_port.h>
 #endif
 
 static const char* TAG = "FileViewer";
@@ -560,8 +561,10 @@ static void audio_player_event_callback(audio_player_cb_ctx_t* ctx) {
     
     audio_player_state_t state = audio_player_get_state();
     if (state == AUDIO_PLAYER_STATE_IDLE && g_current_audio_player) {
-        // Playback finished - just disable output, don't restore sample rate
-        // (audio_player caches rate internally - restoring causes mismatch on next play)
+        // Playback finished - audio_player already closed the file
+        g_current_audio_player->audio_file_ = nullptr;  // Mark as closed (audio_player closed it)
+        
+        // Disable audio output
         auto codec = Board::GetInstance().GetAudioCodec();
         if (codec) {
             codec->EnableOutput(false);
@@ -571,6 +574,16 @@ static void audio_player_event_callback(audio_player_cb_ctx_t* ctx) {
         Application::GetInstance().GetAudioService().ResumePowerTimer();
         
         g_current_audio_player->is_playing_ = false;
+        
+        // Schedule UI update on LVGL task
+        AudioPlayer* player = g_current_audio_player;
+        lvgl_port_lock(0);
+        if (player->progress_bar_) {
+            lv_bar_set_value(player->progress_bar_, 100, LV_ANIM_OFF);
+        }
+        player->SetInfoMessage("Playback finished", lv_color_hex(0x4caf50));
+        lvgl_port_unlock();
+        
         ESP_LOGI(TAG, "Audio playback completed");
     }
 }

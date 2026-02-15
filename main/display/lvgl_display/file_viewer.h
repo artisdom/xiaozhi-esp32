@@ -158,20 +158,21 @@ public:
     
     // Public for audio player callback access
     bool is_playing_ = false;
+    FILE* audio_file_ = nullptr;
+    lv_obj_t* progress_bar_ = nullptr;
+    
+    void SetInfoMessage(const char* msg, lv_color_t color);
 
 private:
     lv_obj_t* play_btn_ = nullptr;
     lv_obj_t* stop_btn_ = nullptr;
-    lv_obj_t* progress_bar_ = nullptr;
     lv_obj_t* time_label_ = nullptr;
     lv_obj_t* file_info_label_ = nullptr;
     lv_obj_t* info_label_ = nullptr;
     
     AudioFormat audio_format_ = AudioFormat::kUnknown;
     std::vector<uint8_t> audio_data_;
-    FILE* audio_file_ = nullptr;
     
-    void SetInfoMessage(const char* msg, lv_color_t color);
     bool PlayOggFile();
     bool PlayMp3WavFile();
     void StopMp3WavFile();
