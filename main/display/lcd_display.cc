@@ -1388,11 +1388,11 @@ void LcdDisplay::SetupFileBrowser() {
     audio_player_->SetCloseCallback(show_browser);
     video_player_->SetCloseCallback(show_browser);
     
-    // Set gallery callback for camera viewer to open file browser to Camera folder
+    // Set gallery callback for camera viewer to open the latest photo
     camera_viewer_->SetGalleryCallback([this](const std::string& path) {
-        if (file_browser_) {
-            ESP_LOGI(TAG, "Opening gallery at: %s", path.c_str());
-            file_browser_->Show(path);
+        if (image_viewer_) {
+            ESP_LOGI(TAG, "Opening photo: %s", path.c_str());
+            image_viewer_->Open(path);
         }
     });
 }

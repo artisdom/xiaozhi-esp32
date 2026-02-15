@@ -372,6 +372,7 @@ void CameraViewer::CameraTaskFunc(void* arg) {
             std::string filepath = std::string(CAMERA_FOLDER) + "/" + filename;
             
             if (camera->SaveJpegToFile(filepath, 90)) {
+                viewer->last_photo_path_ = filepath;  // Remember this photo
                 std::string msg = "Saved: " + filename;
                 viewer->ShowStatus(msg.c_str(), 2000);
                 ESP_LOGI(TAG, "Photo saved: %s", filepath.c_str());
@@ -520,6 +521,38 @@ void CameraViewer::ShowStatus(const char* message, uint32_t duration_ms) {
     lv_timer_set_repeat_count(timer, 1);
 }
 
+std::string CameraViewer::FindLatestPhoto() {
+    DIR* dir = opendir(CAMERA_FOLDER);
+    if (!dir) {
+        ESP_LOGW(TAG, "Failed to open Camera folder");
+        return "";
+    }
+    
+    std::string latest_file;
+    struct dirent* entry;
+    
+    // Files are named IMG_YYYYMMDD_HHMMSS.jpg, so alphabetical sort = chronological
+    while ((entry = readdir(dir)) != nullptr) {
+        if (entry->d_type == DT_REG) {  // Regular file
+            std::string name = entry->d_name;
+            // Check if it's a JPEG file
+            if (name.size() > 4 && 
+                (name.substr(name.size() - 4) == ".jpg" || name.substr(name.size() - 4) == ".JPG")) {
+                if (name > latest_file) {
+                    latest_file = name;
+                }
+            }
+        }
+    }
+    closedir(dir);
+    
+    if (latest_file.empty()) {
+        return "";
+    }
+    
+    return std::string(CAMERA_FOLDER) + "/" + latest_file;
+}
+
 void CameraViewer::OnCaptureButtonClicked(lv_event_t* e) {
     CameraViewer* viewer = static_cast<CameraViewer*>(lv_event_get_user_data(e));
     if (viewer) {
@@ -539,10 +572,20 @@ void CameraViewer::OnCloseButtonClicked(lv_event_t* e) {
 void CameraViewer::OnGalleryButtonClicked(lv_event_t* e) {
     CameraViewer* viewer = static_cast<CameraViewer*>(lv_event_get_user_data(e));
     if (viewer) {
-        ESP_LOGI(TAG, "Gallery button clicked - navigating to Camera folder");
+        ESP_LOGI(TAG, "Gallery button clicked - opening latest photo");
         if (viewer->gallery_callback_) {
-            viewer->Hide();  // Close camera viewer first
-            viewer->gallery_callback_(CAMERA_FOLDER);
+            // Find the photo to show - prefer last taken, otherwise find latest
+            std::string photo_path = viewer->last_photo_path_;
+            if (photo_path.empty()) {
+                photo_path = viewer->FindLatestPhoto();
+            }
+            
+            if (!photo_path.empty()) {
+                viewer->Hide();  // Close camera viewer first
+                viewer->gallery_callback_(photo_path);
+            } else {
+                viewer->ShowStatus("No photos yet", 2000);
+            }
         } else {
             viewer->ShowStatus("Gallery not available", 2000);
         }

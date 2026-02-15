@@ -91,6 +91,7 @@ private:
     std::atomic<bool> task_running_{false};
     CloseCallback close_callback_;
     GalleryCallback gallery_callback_;
+    std::string last_photo_path_;  // Path to most recently taken photo
     
     // Camera task
     TaskHandle_t camera_task_handle_ = nullptr;
@@ -108,6 +109,7 @@ private:
     void StopPreview();
     std::string GeneratePhotoFilename();
     void ShowStatus(const char* message, uint32_t duration_ms = 2000);
+    std::string FindLatestPhoto();  // Find most recent photo in Camera folder
     
     // Camera task function
     static void CameraTaskFunc(void* arg);
