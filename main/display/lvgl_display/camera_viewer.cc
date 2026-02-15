@@ -408,14 +408,14 @@ void CameraViewer::CameraTaskFunc(void* arg) {
             srm_config.out.block_offset_y = 0;
             srm_config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
             
-            // For portrait display, rotate 90° and calculate scale based on rotated dimensions
+            // For portrait display, rotate 270° and calculate scale based on rotated dimensions
             // Camera is landscape (1280x720), preview is portrait (320x480)
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-            // After 90° rotation, effective input becomes frame_height x frame_width
+            // After 270° rotation, effective input becomes frame_height x frame_width
             float scale_x = (float)viewer->preview_width_ / frame_height;
             float scale_y = (float)viewer->preview_height_ / frame_width;
             float scale = (scale_x < scale_y) ? scale_x : scale_y;
-            srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_90;
+            srm_config.rotation_angle = PPA_SRM_ROTATION_ANGLE_270;
 #else
             float scale_x = (float)viewer->preview_width_ / frame_width;
             float scale_y = (float)viewer->preview_height_ / frame_height;
