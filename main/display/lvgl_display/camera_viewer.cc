@@ -25,11 +25,11 @@ static const char* TAG = "CameraViewer";
 // Full camera resolution is still used for photo capture
 // For portrait displays with rotation, swap width/height
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-#define CAMERA_PREVIEW_WIDTH  640
-#define CAMERA_PREVIEW_HEIGHT 960
+#define CAMERA_PREVIEW_WIDTH  480
+#define CAMERA_PREVIEW_HEIGHT 720
 #else
-#define CAMERA_PREVIEW_WIDTH  960
-#define CAMERA_PREVIEW_HEIGHT 640
+#define CAMERA_PREVIEW_WIDTH  720
+#define CAMERA_PREVIEW_HEIGHT 480
 #endif
 
 // SD card camera folder
@@ -37,9 +37,9 @@ static const char* TAG = "CameraViewer";
 
 // Task configuration
 #define CAMERA_TASK_STACK_SIZE (16 * 1024)  // Increased for JPEG encoding
-#define CAMERA_TASK_PRIORITY   3  // Lower priority to not starve LCD refresh
+#define CAMERA_TASK_PRIORITY   2  // Lower priority to not starve LCD refresh and watchdog
 #define COMMAND_QUEUE_SIZE     10
-#define CAMERA_FRAME_DELAY_MS  50  // ~20fps to reduce PSRAM bandwidth usage
+#define CAMERA_FRAME_DELAY_MS  100  // ~10fps to reduce PSRAM bandwidth and avoid watchdog
 
 //=============================================================================
 // CameraViewer implementation
@@ -439,14 +439,15 @@ void CameraViewer::CameraTaskFunc(void* arg) {
                 ESP_LOGE(TAG, "PPA failed: %s", esp_err_to_name(err));
             }
             
-            // Update LVGL canvas
+            // Update LVGL canvas - just mark dirty, LVGL will refresh
             lv_obj_invalidate(viewer->preview_canvas_);
         }
         
         // Release the frame back to camera
         camera->ReleasePreviewFrame();
         
-        vTaskDelay(pdMS_TO_TICKS(CAMERA_FRAME_DELAY_MS)); // ~20fps to reduce PSRAM load
+        // Yield to other tasks to avoid watchdog timeout
+        vTaskDelay(pdMS_TO_TICKS(CAMERA_FRAME_DELAY_MS));
     }
     
     // Cleanup
