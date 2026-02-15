@@ -197,16 +197,31 @@ void Tab5AudioCodec::EnableInput(bool enable) {
     if (enable) {
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
-            .channel = 4,
-            .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
-            .sample_rate = (uint32_t)output_sample_rate_,
+            .channel = 4,  // ES7210 always has 4 TDM slots
+            .channel_mask = 0,
+            .sample_rate = (uint32_t)input_sample_rate_,
             .mclk_multiple = 0,
         };
-        if (input_reference_) {
-            fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
+        
+        // Set channel mask based on input_channels_
+        if (input_channels_ == 1) {
+            // Only MIC-L
+            fs.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0);
+        } else if (input_channels_ == 2) {
+            // MIC-L + AEC reference (default for voice chat)
+            fs.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
+        } else {
+            // 4 channels: MIC-L + AEC + MIC-R + MIC-HP
+            fs.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1) |
+                              ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(3);
         }
+        
         ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
         ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_));
+        if (input_channels_ == 4) {
+            // Also set gain for right microphone
+            ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2), input_gain_));
+        }
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
     }
@@ -373,5 +388,70 @@ bool Tab5AudioCodec::SetOutputChannels(int channels) {
     }
 
     ESP_LOGI(TAG, "Output channels changed to %d", output_channels_);
+    return true;
+}
+
+bool Tab5AudioCodec::SetInputChannels(int channels) {
+    // Tab5 ES7210 supports 1, 2, or 4 channels:
+    // Channel 0: MIC-L (Left microphone)
+    // Channel 1: AEC (Echo cancellation reference from speaker)
+    // Channel 2: MIC-R (Right microphone)
+    // Channel 3: MIC-HP (Headphone microphone)
+    if (channels != 1 && channels != 2 && channels != 4) {
+        ESP_LOGE(TAG, "Invalid input channel count: %d (must be 1, 2, or 4)", channels);
+        return false;
+    }
+    
+    if (channels == input_channels_) {
+        return true;  // Already at this channel count
+    }
+
+    ESP_LOGI(TAG, "Changing input channels from %d to %d", input_channels_, channels);
+
+    // Remember if input was enabled so we can restore it
+    bool was_input_enabled = input_enabled_;
+
+    // Close the codec device if it was open
+    if (was_input_enabled) {
+        ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
+        input_enabled_ = false;
+    }
+
+    // Update the channel count
+    input_channels_ = channels;
+
+    // Reopen the codec device if it was open before
+    if (was_input_enabled) {
+        esp_codec_dev_sample_info_t fs = {
+            .bits_per_sample = 16,
+            .channel = 4,  // ES7210 always has 4 TDM slots
+            .channel_mask = 0,
+            .sample_rate = (uint32_t)input_sample_rate_,
+            .mclk_multiple = 0,
+        };
+        
+        // Set channel mask based on requested channels
+        if (channels == 1) {
+            // Only MIC-L
+            fs.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0);
+        } else if (channels == 2) {
+            // MIC-L + AEC reference (original behavior)
+            fs.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
+        } else {
+            // 4 channels: MIC-L + AEC + MIC-R + MIC-HP
+            fs.channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1) |
+                              ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2) | ESP_CODEC_DEV_MAKE_CHANNEL_MASK(3);
+        }
+        
+        ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
+        ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_));
+        if (channels == 4) {
+            // Also set gain for right microphone
+            ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2), input_gain_));
+        }
+        input_enabled_ = true;
+    }
+
+    ESP_LOGI(TAG, "Input channels changed to %d", input_channels_);
     return true;
 }

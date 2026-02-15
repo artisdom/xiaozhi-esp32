@@ -77,3 +77,9 @@ bool AudioCodec::SetOutputChannels(int channels) {
     ESP_LOGW(TAG, "SetOutputChannels not implemented for this codec");
     return false;
 }
+
+bool AudioCodec::SetInputChannels(int channels) {
+    // Default implementation: no-op, return false to indicate input channels change not supported
+    ESP_LOGW(TAG, "SetInputChannels not implemented for this codec");
+    return false;
+}

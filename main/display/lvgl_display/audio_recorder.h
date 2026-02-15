@@ -126,6 +126,8 @@ private:
     FILE* recording_file_ = nullptr;
     size_t samples_recorded_ = 0;
     int recording_sample_rate_ = 0;  // Actual sample rate from codec
+    int recording_channels_ = 2;     // Recording output channels (stereo for best quality)
+    int original_input_channels_ = 0; // Original codec input channels to restore
 
     // Internal methods
     void CreateUI(lv_obj_t* parent);

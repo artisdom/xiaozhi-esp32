@@ -526,12 +526,23 @@ bool AudioRecorder::StartRecording() {
         return false;
     }
     
-    // Use codec's actual sample rate - always record mono for simplicity
-    recording_sample_rate_ = codec->input_sample_rate();
-    int recording_channels = 1;
+    // Save original input channels for restoration later
+    original_input_channels_ = codec->input_channels();
     
-    ESP_LOGI(TAG, "Recording at %d Hz, mono (codec input: %d ch)", 
-             recording_sample_rate_, codec->input_channels());
+    // Set to 4 input channels to capture all microphones (MIC-L, AEC, MIC-R, MIC-HP)
+    // This allows us to record stereo from left and right microphones
+    if (codec->SetInputChannels(4)) {
+        recording_channels_ = 2;  // Stereo output (MIC-L + MIC-R)
+        ESP_LOGI(TAG, "Set codec to 4 input channels for stereo recording");
+    } else {
+        recording_channels_ = 1;  // Fallback to mono
+        ESP_LOGW(TAG, "Codec doesn't support 4 channels, using mono");
+    }
+    
+    recording_sample_rate_ = codec->input_sample_rate();
+    
+    ESP_LOGI(TAG, "Recording at %d Hz, %s (codec input: %d ch)", 
+             recording_sample_rate_, recording_channels_ == 2 ? "stereo" : "mono", codec->input_channels());
     
     // Generate filename and open file
     std::string filename = GenerateRecordingFilename();
@@ -544,8 +555,8 @@ bool AudioRecorder::StartRecording() {
         return false;
     }
     
-    // Write WAV header with actual sample rate
-    if (!WriteWavHeader(recording_file_, recording_sample_rate_, recording_channels, RECORDING_BITS_PER_SAMPLE)) {
+    // Write WAV header with actual sample rate and channels
+    if (!WriteWavHeader(recording_file_, recording_sample_rate_, recording_channels_, RECORDING_BITS_PER_SAMPLE)) {
         ESP_LOGE(TAG, "Failed to write WAV header");
         fclose(recording_file_);
         recording_file_ = nullptr;
@@ -620,6 +631,14 @@ bool AudioRecorder::StopRecording() {
         ESP_LOGI(TAG, "Recording saved: %s (%zu samples)", current_recording_path_.c_str(), samples_recorded_);
     }
     
+    // Restore original input channels
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (codec && original_input_channels_ > 0) {
+        codec->SetInputChannels(original_input_channels_);
+        ESP_LOGI(TAG, "Restored codec input channels to %d", original_input_channels_);
+        original_input_channels_ = 0;
+    }
+    
     // Update UI
     lv_label_set_text(record_btn_label_, FONT_AWESOME_MICROPHONE);
     lv_obj_set_style_bg_color(record_btn_, lv_color_hex(0xf44336), 0);  // Red
@@ -663,14 +682,11 @@ void AudioRecorder::RecordingTaskFunc(void* arg) {
     bool recording = false;
     std::vector<int16_t> audio_buffer;
     
-    // Calculate samples per read based on codec's actual sample rate
-    int codec_sample_rate = codec->input_sample_rate();
-    int codec_channels = codec->input_channels();
-    bool has_reference = codec->input_reference();  // True if second channel is reference for AEC
-    int samples_per_read = codec_sample_rate * RECORDING_READ_INTERVAL_MS / 1000;
-    
-    ESP_LOGI(TAG, "Codec: sample_rate=%d, channels=%d, has_reference=%d, samples_per_read=%d", 
-             codec_sample_rate, codec_channels, has_reference, samples_per_read);
+    // These will be set when recording starts
+    int codec_sample_rate = 0;
+    int codec_channels = 0;
+    bool has_reference = false;
+    int samples_per_read = 0;
     
     while (true) {
         RecordCommand cmd = RecordCommand::NONE;
@@ -690,8 +706,16 @@ void AudioRecorder::RecordingTaskFunc(void* arg) {
         
         if (cmd == RecordCommand::START) {
             recording = true;
+            // Read codec parameters fresh for each recording session
+            codec_sample_rate = codec->input_sample_rate();
+            codec_channels = codec->input_channels();
+            has_reference = codec->input_reference();
+            samples_per_read = codec_sample_rate * RECORDING_READ_INTERVAL_MS / 1000;
+            
+            ESP_LOGI(TAG, "Recording started - codec: sample_rate=%d, channels=%d, has_reference=%d, samples_per_read=%d", 
+                     codec_sample_rate, codec_channels, has_reference, samples_per_read);
+            
             codec->EnableInput(true);
-            ESP_LOGI(TAG, "Recording started in task");
             continue;
         }
         
@@ -708,30 +732,47 @@ void AudioRecorder::RecordingTaskFunc(void* arg) {
             // Use smaller chunks and no delay - let InputData blocking call pace the loop
             audio_buffer.resize(samples_per_read * codec_channels);
             if (codec->InputData(audio_buffer)) {
-                // Convert to mono if multi-channel
-                if (codec_channels > 1) {
-                    size_t mono_size = audio_buffer.size() / codec_channels;
+                std::vector<int16_t> output_buffer;
+                
+                if (codec_channels == 4 && recorder->recording_channels_ == 2) {
+                    // Tab5: 4-channel input [MIC-L, AEC, MIC-R, MIC-HP]
+                    // Extract channels 0 (MIC-L) and 2 (MIC-R) for stereo output
+                    size_t frame_count = audio_buffer.size() / 4;
+                    output_buffer.resize(frame_count * 2);  // Stereo output
+                    for (size_t i = 0; i < frame_count; i++) {
+                        output_buffer[i * 2]     = audio_buffer[i * 4];      // Left = MIC-L (ch0)
+                        output_buffer[i * 2 + 1] = audio_buffer[i * 4 + 2];  // Right = MIC-R (ch2)
+                    }
+                } else if (codec_channels == 2 && recorder->recording_channels_ == 1) {
+                    // 2-channel to mono: take first channel only (MIC-L or average both)
+                    size_t mono_size = audio_buffer.size() / 2;
+                    output_buffer.resize(mono_size);
                     if (has_reference) {
-                        // Second channel is reference (for AEC), only take first channel (microphone)
-                        for (size_t i = 0, j = 0; i < mono_size; i++, j += codec_channels) {
-                            audio_buffer[i] = audio_buffer[j];
+                        // Second channel is reference (for AEC), only take first channel
+                        for (size_t i = 0, j = 0; i < mono_size; i++, j += 2) {
+                            output_buffer[i] = audio_buffer[j];
                         }
                     } else {
                         // True stereo - average both channels
-                        for (size_t i = 0, j = 0; i < mono_size; i++, j += codec_channels) {
+                        for (size_t i = 0, j = 0; i < mono_size; i++, j += 2) {
                             int32_t sum = (int32_t)audio_buffer[j] + (int32_t)audio_buffer[j + 1];
-                            audio_buffer[i] = (int16_t)(sum / 2);
+                            output_buffer[i] = (int16_t)(sum / 2);
                         }
                     }
-                    audio_buffer.resize(mono_size);
+                } else if (codec_channels == 1 || recorder->recording_channels_ == 1) {
+                    // Already mono or want mono from single channel
+                    output_buffer = std::move(audio_buffer);
+                } else {
+                    // Fallback: just copy as-is
+                    output_buffer = std::move(audio_buffer);
                 }
                 
                 // Write to file
-                size_t written = fwrite(audio_buffer.data(), sizeof(int16_t), 
-                                       audio_buffer.size(), recorder->recording_file_);
-                if (written != audio_buffer.size()) {
+                size_t written = fwrite(output_buffer.data(), sizeof(int16_t), 
+                                       output_buffer.size(), recorder->recording_file_);
+                if (written != output_buffer.size()) {
                     ESP_LOGE(TAG, "Failed to write audio data: wrote %zu of %zu",
-                             written, audio_buffer.size());
+                             written, output_buffer.size());
                 }
                 recorder->samples_recorded_ += written;
             }
