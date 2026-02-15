@@ -28,7 +28,7 @@ static const char* TAG = "AudioRecorder";
 #define RECORDING_TASK_STACK_SIZE (8 * 1024)
 #define RECORDING_TASK_PRIORITY   3
 #define COMMAND_QUEUE_SIZE        10
-#define RECORDING_READ_INTERVAL_MS 20  // Read audio every 20ms
+#define RECORDING_READ_INTERVAL_MS 10  // Read audio every 10ms (matches audio service)
 
 // Grid layout
 #define GRID_COLUMNS 3
@@ -705,19 +705,20 @@ void AudioRecorder::RecordingTaskFunc(void* arg) {
         
         if (recording && recorder->recording_file_) {
             // Read audio data - buffer size = samples * channels
+            // Use smaller chunks and no delay - let InputData blocking call pace the loop
             audio_buffer.resize(samples_per_read * codec_channels);
             if (codec->InputData(audio_buffer)) {
-                // Convert to mono if stereo
-                if (codec_channels == 2) {
-                    size_t mono_size = audio_buffer.size() / 2;
+                // Convert to mono if multi-channel
+                if (codec_channels > 1) {
+                    size_t mono_size = audio_buffer.size() / codec_channels;
                     if (has_reference) {
                         // Second channel is reference (for AEC), only take first channel (microphone)
-                        for (size_t i = 0, j = 0; i < mono_size; i++, j += 2) {
+                        for (size_t i = 0, j = 0; i < mono_size; i++, j += codec_channels) {
                             audio_buffer[i] = audio_buffer[j];
                         }
                     } else {
                         // True stereo - average both channels
-                        for (size_t i = 0, j = 0; i < mono_size; i++, j += 2) {
+                        for (size_t i = 0, j = 0; i < mono_size; i++, j += codec_channels) {
                             int32_t sum = (int32_t)audio_buffer[j] + (int32_t)audio_buffer[j + 1];
                             audio_buffer[i] = (int16_t)(sum / 2);
                         }
@@ -733,11 +734,8 @@ void AudioRecorder::RecordingTaskFunc(void* arg) {
                              written, audio_buffer.size());
                 }
                 recorder->samples_recorded_ += written;
-            } else {
-                ESP_LOGW(TAG, "Failed to read audio data from codec");
             }
-            
-            vTaskDelay(pdMS_TO_TICKS(RECORDING_READ_INTERVAL_MS));
+            // No delay - InputData blocks until DMA buffer has data, naturally pacing the loop
         }
     }
     
