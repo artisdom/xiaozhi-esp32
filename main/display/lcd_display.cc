@@ -940,7 +940,7 @@ void LcdDisplay::SetupUI() {
     
     /* Toolbar - horizontal bar below status bar for action buttons */
     toolbar_ = lv_obj_create(screen);
-    lv_obj_set_size(toolbar_, LV_HOR_RES, 50);
+    lv_obj_set_size(toolbar_, LV_HOR_RES, 75);
     lv_obj_set_style_radius(toolbar_, 0, 0);
     lv_obj_set_style_bg_opa(toolbar_, LV_OPA_50, 0);
     lv_obj_set_style_bg_color(toolbar_, lvgl_theme->background_color(), 0);
