@@ -33,6 +33,7 @@ protected:
     lv_obj_t* top_bar_ = nullptr;
     lv_obj_t* status_bar_ = nullptr;
     lv_obj_t* toolbar_ = nullptr;
+    lv_obj_t* toolbar2_ = nullptr;
     lv_obj_t* content_ = nullptr;
     lv_obj_t* container_ = nullptr;
     lv_obj_t* side_bar_ = nullptr;
@@ -53,6 +54,8 @@ protected:
     lv_obj_t* microphone_btn_ = nullptr;
     lv_obj_t* brightness_up_btn_ = nullptr;
     lv_obj_t* brightness_down_btn_ = nullptr;
+    lv_obj_t* volume_up_btn_ = nullptr;
+    lv_obj_t* volume_down_btn_ = nullptr;
     FileBrowser* file_browser_ = nullptr;
     TextFileViewer* text_viewer_ = nullptr;
     ImageViewer* image_viewer_ = nullptr;

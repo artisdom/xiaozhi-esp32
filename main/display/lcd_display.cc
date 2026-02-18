@@ -16,6 +16,7 @@
 #include <src/misc/cache/lv_cache.h>
 
 #include "board.h"
+#include "audio/audio_codec.h"
 
 #if CONFIG_IDF_TARGET_ESP32P4
 #include "lvgl_display/file_browser.h"
@@ -1104,6 +1105,80 @@ void LcdDisplay::SetupUI() {
         if (target > 100) target = 100;
         ESP_LOGI(TAG, "Setting brightness from %d to %d", current, target);
         backlight->SetBrightness(target, true);  // true = save to flash
+    }, LV_EVENT_CLICKED, this);
+
+    /* Second Toolbar - below first toolbar for volume controls */
+    toolbar2_ = lv_obj_create(screen);
+    lv_obj_set_size(toolbar2_, LV_HOR_RES, 75);
+    lv_obj_set_style_radius(toolbar2_, 0, 0);
+    lv_obj_set_style_bg_opa(toolbar2_, LV_OPA_50, 0);
+    lv_obj_set_style_bg_color(toolbar2_, lvgl_theme->background_color(), 0);
+    lv_obj_set_style_border_width(toolbar2_, 0, 0);
+    lv_obj_set_style_pad_all(toolbar2_, 0, 0);
+    lv_obj_set_style_pad_left(toolbar2_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_style_pad_right(toolbar2_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_scrollbar_mode(toolbar2_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(toolbar2_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align_to(toolbar2_, toolbar_, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
+
+    // Volume decrease button (left side of toolbar2)
+    volume_down_btn_ = lv_btn_create(toolbar2_);
+    lv_obj_set_size(volume_down_btn_, 88, 88);
+    lv_obj_set_style_bg_color(volume_down_btn_, lv_color_hex(0x3a3a5e), 0);
+    lv_obj_set_style_bg_opa(volume_down_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(volume_down_btn_, 8, 0);
+    lv_obj_set_style_border_width(volume_down_btn_, 0, 0);
+    lv_obj_set_style_pad_all(volume_down_btn_, 0, 0);
+    lv_obj_align(volume_down_btn_, LV_ALIGN_LEFT_MID, 0, 0);
+    
+    lv_obj_t* volume_down_label = lv_label_create(volume_down_btn_);
+    lv_label_set_text(volume_down_label, "-");
+    lv_obj_set_style_text_font(volume_down_label, text_font, 0);
+    lv_obj_set_style_text_color(volume_down_label, lv_color_white(), 0);
+    lv_obj_center(volume_down_label);
+    
+    lv_obj_add_event_cb(volume_down_btn_, [](lv_event_t* e) {
+        ESP_LOGI(TAG, "Volume down button clicked");
+        auto audio_codec = Board::GetInstance().GetAudioCodec();
+        if (audio_codec == nullptr) {
+            ESP_LOGE(TAG, "Audio codec is null");
+            return;
+        }
+        int current = audio_codec->output_volume();
+        int target = current - 5;
+        if (target < 0) target = 0;
+        ESP_LOGI(TAG, "Setting volume from %d to %d", current, target);
+        audio_codec->SetOutputVolume(target);
+    }, LV_EVENT_CLICKED, this);
+
+    // Volume increase button (right of volume down button)
+    volume_up_btn_ = lv_btn_create(toolbar2_);
+    lv_obj_set_size(volume_up_btn_, 88, 88);
+    lv_obj_set_style_bg_color(volume_up_btn_, lv_color_hex(0x3a3a5e), 0);
+    lv_obj_set_style_bg_opa(volume_up_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(volume_up_btn_, 8, 0);
+    lv_obj_set_style_border_width(volume_up_btn_, 0, 0);
+    lv_obj_set_style_pad_all(volume_up_btn_, 0, 0);
+    lv_obj_align_to(volume_up_btn_, volume_down_btn_, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+    
+    lv_obj_t* volume_up_label = lv_label_create(volume_up_btn_);
+    lv_label_set_text(volume_up_label, "+");
+    lv_obj_set_style_text_font(volume_up_label, text_font, 0);
+    lv_obj_set_style_text_color(volume_up_label, lv_color_white(), 0);
+    lv_obj_center(volume_up_label);
+    
+    lv_obj_add_event_cb(volume_up_btn_, [](lv_event_t* e) {
+        ESP_LOGI(TAG, "Volume up button clicked");
+        auto audio_codec = Board::GetInstance().GetAudioCodec();
+        if (audio_codec == nullptr) {
+            ESP_LOGE(TAG, "Audio codec is null");
+            return;
+        }
+        int current = audio_codec->output_volume();
+        int target = current + 5;
+        if (target > 100) target = 100;
+        ESP_LOGI(TAG, "Setting volume from %d to %d", current, target);
+        audio_codec->SetOutputVolume(target);
     }, LV_EVENT_CLICKED, this);
 #endif
 
