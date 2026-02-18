@@ -51,6 +51,8 @@ protected:
     lv_obj_t* file_browser_btn_ = nullptr;
     lv_obj_t* camera_btn_ = nullptr;
     lv_obj_t* microphone_btn_ = nullptr;
+    lv_obj_t* brightness_up_btn_ = nullptr;
+    lv_obj_t* brightness_down_btn_ = nullptr;
     FileBrowser* file_browser_ = nullptr;
     TextFileViewer* text_viewer_ = nullptr;
     ImageViewer* image_viewer_ = nullptr;

@@ -1045,6 +1045,66 @@ void LcdDisplay::SetupUI() {
         ESP_LOGI(TAG, "Calling audio_recorder_->Show()");
         display->audio_recorder_->Show();
     }, LV_EVENT_CLICKED, this);
+
+    // Brightness decrease button (left side of toolbar)
+    brightness_down_btn_ = lv_btn_create(toolbar_);
+    lv_obj_set_size(brightness_down_btn_, 88, 88);
+    lv_obj_set_style_bg_color(brightness_down_btn_, lv_color_hex(0x3a3a5e), 0);
+    lv_obj_set_style_bg_opa(brightness_down_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(brightness_down_btn_, 8, 0);
+    lv_obj_set_style_border_width(brightness_down_btn_, 0, 0);
+    lv_obj_set_style_pad_all(brightness_down_btn_, 0, 0);
+    lv_obj_align(brightness_down_btn_, LV_ALIGN_LEFT_MID, 0, 0);
+    
+    lv_obj_t* brightness_down_label = lv_label_create(brightness_down_btn_);
+    lv_label_set_text(brightness_down_label, "-");
+    lv_obj_set_style_text_font(brightness_down_label, text_font, 0);
+    lv_obj_set_style_text_color(brightness_down_label, lv_color_white(), 0);
+    lv_obj_center(brightness_down_label);
+    
+    lv_obj_add_event_cb(brightness_down_btn_, [](lv_event_t* e) {
+        ESP_LOGI(TAG, "Brightness down button clicked");
+        auto backlight = Board::GetInstance().GetBacklight();
+        if (backlight == nullptr) {
+            ESP_LOGE(TAG, "Backlight is null");
+            return;
+        }
+        int current = backlight->brightness();
+        int target = current - 10;
+        if (target < 0) target = 0;
+        ESP_LOGI(TAG, "Setting brightness from %d to %d", current, target);
+        backlight->SetBrightness(target, true);  // true = save to flash
+    }, LV_EVENT_CLICKED, this);
+
+    // Brightness increase button (right of brightness down button)
+    brightness_up_btn_ = lv_btn_create(toolbar_);
+    lv_obj_set_size(brightness_up_btn_, 88, 88);
+    lv_obj_set_style_bg_color(brightness_up_btn_, lv_color_hex(0x3a3a5e), 0);
+    lv_obj_set_style_bg_opa(brightness_up_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(brightness_up_btn_, 8, 0);
+    lv_obj_set_style_border_width(brightness_up_btn_, 0, 0);
+    lv_obj_set_style_pad_all(brightness_up_btn_, 0, 0);
+    lv_obj_align_to(brightness_up_btn_, brightness_down_btn_, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+    
+    lv_obj_t* brightness_up_label = lv_label_create(brightness_up_btn_);
+    lv_label_set_text(brightness_up_label, "+");
+    lv_obj_set_style_text_font(brightness_up_label, text_font, 0);
+    lv_obj_set_style_text_color(brightness_up_label, lv_color_white(), 0);
+    lv_obj_center(brightness_up_label);
+    
+    lv_obj_add_event_cb(brightness_up_btn_, [](lv_event_t* e) {
+        ESP_LOGI(TAG, "Brightness up button clicked");
+        auto backlight = Board::GetInstance().GetBacklight();
+        if (backlight == nullptr) {
+            ESP_LOGE(TAG, "Backlight is null");
+            return;
+        }
+        int current = backlight->brightness();
+        int target = current + 10;
+        if (target > 100) target = 100;
+        ESP_LOGI(TAG, "Setting brightness from %d to %d", current, target);
+        backlight->SetBrightness(target, true);  // true = save to flash
+    }, LV_EVENT_CLICKED, this);
 #endif
 
     /* Top layer: Bottom bar - fixed height at bottom */
