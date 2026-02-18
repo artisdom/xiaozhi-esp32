@@ -940,7 +940,21 @@ void LcdDisplay::SetupUI() {
     // Make status_bar not intercept clicks so toolbar below can receive them
     lv_obj_clear_flag(status_bar_, LV_OBJ_FLAG_CLICKABLE);
     
-    /* Toolbar - horizontal bar below status bar for action buttons */
+    /* Second Toolbar - above first toolbar for brightness and volume controls */
+    toolbar2_ = lv_obj_create(screen);
+    lv_obj_set_size(toolbar2_, LV_HOR_RES, 75);
+    lv_obj_set_style_radius(toolbar2_, 0, 0);
+    lv_obj_set_style_bg_opa(toolbar2_, LV_OPA_50, 0);
+    lv_obj_set_style_bg_color(toolbar2_, lvgl_theme->background_color(), 0);
+    lv_obj_set_style_border_width(toolbar2_, 0, 0);
+    lv_obj_set_style_pad_all(toolbar2_, 0, 0);
+    lv_obj_set_style_pad_left(toolbar2_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_style_pad_right(toolbar2_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_scrollbar_mode(toolbar2_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(toolbar2_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(toolbar2_, LV_ALIGN_TOP_MID, 0, text_font->line_height + lvgl_theme->spacing(4));
+
+    /* Toolbar - below second toolbar for action buttons */
     toolbar_ = lv_obj_create(screen);
     lv_obj_set_size(toolbar_, LV_HOR_RES, 75);
     lv_obj_set_style_radius(toolbar_, 0, 0);
@@ -952,7 +966,7 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_pad_right(toolbar_, lvgl_theme->spacing(4), 0);
     lv_obj_set_scrollbar_mode(toolbar_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_clear_flag(toolbar_, LV_OBJ_FLAG_SCROLLABLE);  // Ensure clicks pass to children
-    lv_obj_align(toolbar_, LV_ALIGN_TOP_MID, 0, text_font->line_height + lvgl_theme->spacing(4));
+    lv_obj_align_to(toolbar_, toolbar2_, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
 
     // SD card file browser button (left side of toolbar)
     file_browser_btn_ = lv_btn_create(toolbar_);
@@ -1047,20 +1061,6 @@ void LcdDisplay::SetupUI() {
         display->audio_recorder_->Show();
     }, LV_EVENT_CLICKED, this);
 
-    /* Second Toolbar - below first toolbar for brightness and volume controls */
-    toolbar2_ = lv_obj_create(screen);
-    lv_obj_set_size(toolbar2_, LV_HOR_RES, 75);
-    lv_obj_set_style_radius(toolbar2_, 0, 0);
-    lv_obj_set_style_bg_opa(toolbar2_, LV_OPA_50, 0);
-    lv_obj_set_style_bg_color(toolbar2_, lvgl_theme->background_color(), 0);
-    lv_obj_set_style_border_width(toolbar2_, 0, 0);
-    lv_obj_set_style_pad_all(toolbar2_, 0, 0);
-    lv_obj_set_style_pad_left(toolbar2_, lvgl_theme->spacing(4), 0);
-    lv_obj_set_style_pad_right(toolbar2_, lvgl_theme->spacing(4), 0);
-    lv_obj_set_scrollbar_mode(toolbar2_, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_clear_flag(toolbar2_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align_to(toolbar2_, toolbar_, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
-
     // Brightness increase button (left side of toolbar2)
     brightness_up_btn_ = lv_btn_create(toolbar2_);
     lv_obj_set_size(brightness_up_btn_, 60, 60);
@@ -1086,7 +1086,7 @@ void LcdDisplay::SetupUI() {
             return;
         }
         int current = backlight->brightness();
-        int target = current + 10;
+        int target = current + 5;
         if (target > 100) target = 100;
         ESP_LOGI(TAG, "Setting brightness from %d to %d", current, target);
         backlight->SetBrightness(target, true);  // true = save to flash
@@ -1123,7 +1123,7 @@ void LcdDisplay::SetupUI() {
             return;
         }
         int current = backlight->brightness();
-        int target = current - 10;
+        int target = current - 5;
         if (target < 0) target = 0;
         ESP_LOGI(TAG, "Setting brightness from %d to %d", current, target);
         backlight->SetBrightness(target, true);  // true = save to flash
