@@ -23,6 +23,7 @@
 #include "lvgl_display/file_viewer.h"
 #include "lvgl_display/camera_viewer.h"
 #include "lvgl_display/audio_recorder.h"
+#include "lvgl_display/wifi_manager_screen.h"
 #endif
 
 #define TAG "LcdDisplay"
@@ -1061,6 +1062,37 @@ void LcdDisplay::SetupUI() {
         display->audio_recorder_->Show();
     }, LV_EVENT_CLICKED, this);
 
+    // WiFi button (right of Microphone button)
+    wifi_btn_ = lv_btn_create(toolbar_);
+    lv_obj_set_size(wifi_btn_, 88, 88);
+    lv_obj_set_style_bg_color(wifi_btn_, lv_color_hex(0x3a3a5e), 0);
+    lv_obj_set_style_bg_opa(wifi_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(wifi_btn_, 8, 0);
+    lv_obj_set_style_border_width(wifi_btn_, 0, 0);
+    lv_obj_set_style_pad_all(wifi_btn_, 0, 0);
+    lv_obj_align_to(wifi_btn_, microphone_btn_, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+    
+    lv_obj_t* wifi_label = lv_label_create(wifi_btn_);
+    lv_label_set_text(wifi_label, FONT_AWESOME_WIFI);
+    lv_obj_set_style_text_font(wifi_label, icon_font, 0);
+    lv_obj_set_style_text_color(wifi_label, lv_color_white(), 0);
+    lv_obj_center(wifi_label);
+    
+    lv_obj_add_event_cb(wifi_btn_, [](lv_event_t* e) {
+        ESP_LOGI(TAG, "WiFi button clicked");
+        LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
+        if (display == nullptr) {
+            ESP_LOGE(TAG, "Display pointer is null");
+            return;
+        }
+        if (display->wifi_manager_screen_ == nullptr) {
+            ESP_LOGE(TAG, "WiFi manager screen is null - not initialized yet");
+            return;
+        }
+        ESP_LOGI(TAG, "Calling wifi_manager_screen_->Show()");
+        display->wifi_manager_screen_->Show();
+    }, LV_EVENT_CLICKED, this);
+
     // Brightness increase button (left side of toolbar2)
     brightness_up_btn_ = lv_btn_create(toolbar2_);
     lv_obj_set_size(brightness_up_btn_, 60, 60);
@@ -1282,6 +1314,7 @@ void LcdDisplay::SetupUI() {
 #if CONFIG_IDF_TARGET_ESP32P4
     // Initialize file browser and viewers
     SetupFileBrowser();
+    SetupWifiManagerScreen();
 #endif
 }
 
@@ -1650,6 +1683,11 @@ void LcdDisplay::SetupFileBrowser() {
             audio_player_->Open(path);
         }
     });
+}
+
+void LcdDisplay::SetupWifiManagerScreen() {
+    wifi_manager_screen_ = new WifiManagerScreen();
+    wifi_manager_screen_->Init();
 }
 
 void LcdDisplay::OnFileBrowserFileSelected(const std::string& path, int file_type) {

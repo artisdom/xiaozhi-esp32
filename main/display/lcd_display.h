@@ -19,6 +19,7 @@ class AudioPlayer;
 class VideoPlayer;
 class CameraViewer;
 class AudioRecorder;
+class WifiManagerScreen;
 #endif
 
 #define PREVIEW_IMAGE_DURATION_MS 5000
@@ -52,6 +53,7 @@ protected:
     lv_obj_t* file_browser_btn_ = nullptr;
     lv_obj_t* camera_btn_ = nullptr;
     lv_obj_t* microphone_btn_ = nullptr;
+    lv_obj_t* wifi_btn_ = nullptr;
     lv_obj_t* brightness_up_btn_ = nullptr;
     lv_obj_t* brightness_down_btn_ = nullptr;
     lv_obj_t* brightness_label_ = nullptr;
@@ -65,8 +67,10 @@ protected:
     VideoPlayer* video_player_ = nullptr;
     CameraViewer* camera_viewer_ = nullptr;
     AudioRecorder* audio_recorder_ = nullptr;
+    WifiManagerScreen* wifi_manager_screen_ = nullptr;
     
     void SetupFileBrowser();
+    void SetupWifiManagerScreen();
     void OnFileBrowserFileSelected(const std::string& path, int file_type);
 #endif
 
