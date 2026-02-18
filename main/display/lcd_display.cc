@@ -1047,9 +1047,23 @@ void LcdDisplay::SetupUI() {
         display->audio_recorder_->Show();
     }, LV_EVENT_CLICKED, this);
 
-    // Brightness decrease button (left side of toolbar)
-    brightness_down_btn_ = lv_btn_create(toolbar_);
-    lv_obj_set_size(brightness_down_btn_, 88, 88);
+    /* Second Toolbar - below first toolbar for brightness and volume controls */
+    toolbar2_ = lv_obj_create(screen);
+    lv_obj_set_size(toolbar2_, LV_HOR_RES, 75);
+    lv_obj_set_style_radius(toolbar2_, 0, 0);
+    lv_obj_set_style_bg_opa(toolbar2_, LV_OPA_50, 0);
+    lv_obj_set_style_bg_color(toolbar2_, lvgl_theme->background_color(), 0);
+    lv_obj_set_style_border_width(toolbar2_, 0, 0);
+    lv_obj_set_style_pad_all(toolbar2_, 0, 0);
+    lv_obj_set_style_pad_left(toolbar2_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_style_pad_right(toolbar2_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_scrollbar_mode(toolbar2_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(toolbar2_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align_to(toolbar2_, toolbar_, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
+
+    // Brightness decrease button (left side of toolbar2)
+    brightness_down_btn_ = lv_btn_create(toolbar2_);
+    lv_obj_set_size(brightness_down_btn_, 60, 60);
     lv_obj_set_style_bg_color(brightness_down_btn_, lv_color_hex(0x3a3a5e), 0);
     lv_obj_set_style_bg_opa(brightness_down_btn_, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(brightness_down_btn_, 8, 0);
@@ -1065,6 +1079,7 @@ void LcdDisplay::SetupUI() {
     
     lv_obj_add_event_cb(brightness_down_btn_, [](lv_event_t* e) {
         ESP_LOGI(TAG, "Brightness down button clicked");
+        LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
         auto backlight = Board::GetInstance().GetBacklight();
         if (backlight == nullptr) {
             ESP_LOGE(TAG, "Backlight is null");
@@ -1075,11 +1090,17 @@ void LcdDisplay::SetupUI() {
         if (target < 0) target = 0;
         ESP_LOGI(TAG, "Setting brightness from %d to %d", current, target);
         backlight->SetBrightness(target, true);  // true = save to flash
+        // Update label
+        if (display && display->brightness_label_) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Brightness: %d%%", target);
+            lv_label_set_text(display->brightness_label_, buf);
+        }
     }, LV_EVENT_CLICKED, this);
 
     // Brightness increase button (right of brightness down button)
-    brightness_up_btn_ = lv_btn_create(toolbar_);
-    lv_obj_set_size(brightness_up_btn_, 88, 88);
+    brightness_up_btn_ = lv_btn_create(toolbar2_);
+    lv_obj_set_size(brightness_up_btn_, 60, 60);
     lv_obj_set_style_bg_color(brightness_up_btn_, lv_color_hex(0x3a3a5e), 0);
     lv_obj_set_style_bg_opa(brightness_up_btn_, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(brightness_up_btn_, 8, 0);
@@ -1095,6 +1116,7 @@ void LcdDisplay::SetupUI() {
     
     lv_obj_add_event_cb(brightness_up_btn_, [](lv_event_t* e) {
         ESP_LOGI(TAG, "Brightness up button clicked");
+        LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
         auto backlight = Board::GetInstance().GetBacklight();
         if (backlight == nullptr) {
             ESP_LOGE(TAG, "Backlight is null");
@@ -1105,31 +1127,36 @@ void LcdDisplay::SetupUI() {
         if (target > 100) target = 100;
         ESP_LOGI(TAG, "Setting brightness from %d to %d", current, target);
         backlight->SetBrightness(target, true);  // true = save to flash
+        // Update label
+        if (display && display->brightness_label_) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Brightness: %d%%", target);
+            lv_label_set_text(display->brightness_label_, buf);
+        }
     }, LV_EVENT_CLICKED, this);
 
-    /* Second Toolbar - below first toolbar for volume controls */
-    toolbar2_ = lv_obj_create(screen);
-    lv_obj_set_size(toolbar2_, LV_HOR_RES, 75);
-    lv_obj_set_style_radius(toolbar2_, 0, 0);
-    lv_obj_set_style_bg_opa(toolbar2_, LV_OPA_50, 0);
-    lv_obj_set_style_bg_color(toolbar2_, lvgl_theme->background_color(), 0);
-    lv_obj_set_style_border_width(toolbar2_, 0, 0);
-    lv_obj_set_style_pad_all(toolbar2_, 0, 0);
-    lv_obj_set_style_pad_left(toolbar2_, lvgl_theme->spacing(4), 0);
-    lv_obj_set_style_pad_right(toolbar2_, lvgl_theme->spacing(4), 0);
-    lv_obj_set_scrollbar_mode(toolbar2_, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_clear_flag(toolbar2_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align_to(toolbar2_, toolbar_, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
+    // Brightness label (shows "Brightness: XX%")
+    brightness_label_ = lv_label_create(toolbar2_);
+    {
+        auto backlight = Board::GetInstance().GetBacklight();
+        int brightness = backlight ? backlight->brightness() : 0;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Brightness: %d%%", brightness);
+        lv_label_set_text(brightness_label_, buf);
+    }
+    lv_obj_set_style_text_font(brightness_label_, text_font, 0);
+    lv_obj_set_style_text_color(brightness_label_, lvgl_theme->text_color(), 0);
+    lv_obj_align_to(brightness_label_, brightness_up_btn_, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
 
-    // Volume decrease button (left side of toolbar2)
+    // Volume decrease button (after brightness label)
     volume_down_btn_ = lv_btn_create(toolbar2_);
-    lv_obj_set_size(volume_down_btn_, 88, 88);
+    lv_obj_set_size(volume_down_btn_, 60, 60);
     lv_obj_set_style_bg_color(volume_down_btn_, lv_color_hex(0x3a3a5e), 0);
     lv_obj_set_style_bg_opa(volume_down_btn_, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(volume_down_btn_, 8, 0);
     lv_obj_set_style_border_width(volume_down_btn_, 0, 0);
     lv_obj_set_style_pad_all(volume_down_btn_, 0, 0);
-    lv_obj_align(volume_down_btn_, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align_to(volume_down_btn_, brightness_label_, LV_ALIGN_OUT_RIGHT_MID, 24, 0);
     
     lv_obj_t* volume_down_label = lv_label_create(volume_down_btn_);
     lv_label_set_text(volume_down_label, "-");
@@ -1139,6 +1166,7 @@ void LcdDisplay::SetupUI() {
     
     lv_obj_add_event_cb(volume_down_btn_, [](lv_event_t* e) {
         ESP_LOGI(TAG, "Volume down button clicked");
+        LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
         auto audio_codec = Board::GetInstance().GetAudioCodec();
         if (audio_codec == nullptr) {
             ESP_LOGE(TAG, "Audio codec is null");
@@ -1149,11 +1177,17 @@ void LcdDisplay::SetupUI() {
         if (target < 0) target = 0;
         ESP_LOGI(TAG, "Setting volume from %d to %d", current, target);
         audio_codec->SetOutputVolume(target);
+        // Update label
+        if (display && display->volume_label_) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Volume: %d%%", target);
+            lv_label_set_text(display->volume_label_, buf);
+        }
     }, LV_EVENT_CLICKED, this);
 
     // Volume increase button (right of volume down button)
     volume_up_btn_ = lv_btn_create(toolbar2_);
-    lv_obj_set_size(volume_up_btn_, 88, 88);
+    lv_obj_set_size(volume_up_btn_, 60, 60);
     lv_obj_set_style_bg_color(volume_up_btn_, lv_color_hex(0x3a3a5e), 0);
     lv_obj_set_style_bg_opa(volume_up_btn_, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(volume_up_btn_, 8, 0);
@@ -1169,6 +1203,7 @@ void LcdDisplay::SetupUI() {
     
     lv_obj_add_event_cb(volume_up_btn_, [](lv_event_t* e) {
         ESP_LOGI(TAG, "Volume up button clicked");
+        LcdDisplay* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
         auto audio_codec = Board::GetInstance().GetAudioCodec();
         if (audio_codec == nullptr) {
             ESP_LOGE(TAG, "Audio codec is null");
@@ -1179,7 +1214,26 @@ void LcdDisplay::SetupUI() {
         if (target > 100) target = 100;
         ESP_LOGI(TAG, "Setting volume from %d to %d", current, target);
         audio_codec->SetOutputVolume(target);
+        // Update label
+        if (display && display->volume_label_) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Volume: %d%%", target);
+            lv_label_set_text(display->volume_label_, buf);
+        }
     }, LV_EVENT_CLICKED, this);
+
+    // Volume label (shows "Volume: XX%")
+    volume_label_ = lv_label_create(toolbar2_);
+    {
+        auto audio_codec = Board::GetInstance().GetAudioCodec();
+        int volume = audio_codec ? audio_codec->output_volume() : 0;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Volume: %d%%", volume);
+        lv_label_set_text(volume_label_, buf);
+    }
+    lv_obj_set_style_text_font(volume_label_, text_font, 0);
+    lv_obj_set_style_text_color(volume_label_, lvgl_theme->text_color(), 0);
+    lv_obj_align_to(volume_label_, volume_up_btn_, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
 #endif
 
     /* Top layer: Bottom bar - fixed height at bottom */
