@@ -20,6 +20,22 @@ static constexpr uint32_t CONNECT_TIMEOUT_MS = 25000;
 static constexpr uint32_t SCAN_TASK_STACK_SIZE = 6144;
 static constexpr UBaseType_t SCAN_TASK_PRIORITY = 2;
 
+static const char* kPasswordKeyMapLower[] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
+    "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "\n",
+    "a", "s", "d", "f", "g", "h", "j", "k", "l", "\n",
+    "Shift", "z", "x", "c", "v", "b", "n", "m", "\n",
+    "Space", "Del", "Clear", "Done", ""
+};
+
+static const char* kPasswordKeyMapUpper[] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
+    "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "\n",
+    "A", "S", "D", "F", "G", "H", "J", "K", "L", "\n",
+    "Shift", "Z", "X", "C", "V", "B", "N", "M", "\n",
+    "Space", "Del", "Clear", "Done", ""
+};
+
 static bool RequiresPassword(wifi_auth_mode_t authmode) {
     if (authmode == WIFI_AUTH_OPEN) {
         return false;
@@ -206,7 +222,7 @@ void WifiManagerScreen::CreatePasswordDialog() {
     }
 
     lv_obj_t* panel = lv_obj_create(password_modal_);
-    lv_obj_set_size(panel, panel_width, 210);
+    lv_obj_set_size(panel, panel_width, 248);
     lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 20);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1a274a), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
@@ -231,13 +247,26 @@ void WifiManagerScreen::CreatePasswordDialog() {
     lv_obj_set_size(password_textarea_, panel_width - 24, 52);
     lv_obj_align(password_textarea_, LV_ALIGN_TOP_MID, 0, 62);
     lv_textarea_set_one_line(password_textarea_, true);
-    lv_textarea_set_password_mode(password_textarea_, true);
+    lv_textarea_set_password_mode(password_textarea_, !password_visible_);
     lv_textarea_set_placeholder_text(password_textarea_, "WiFi password");
     lv_textarea_set_max_length(password_textarea_, 64);
 
+    password_visibility_btn_ = lv_btn_create(panel);
+    lv_obj_set_size(password_visibility_btn_, panel_width - 24, 34);
+    lv_obj_align(password_visibility_btn_, LV_ALIGN_TOP_MID, 0, 120);
+    lv_obj_set_style_bg_color(password_visibility_btn_, lv_color_hex(0x274273), 0);
+    lv_obj_set_style_bg_opa(password_visibility_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(password_visibility_btn_, 8, 0);
+    lv_obj_set_style_border_width(password_visibility_btn_, 0, 0);
+    lv_obj_add_event_cb(password_visibility_btn_, OnPasswordVisibilityClicked, LV_EVENT_CLICKED, this);
+
+    password_visibility_label_ = lv_label_create(password_visibility_btn_);
+    lv_obj_set_style_text_color(password_visibility_label_, lv_color_white(), 0);
+    lv_obj_center(password_visibility_label_);
+
     lv_obj_t* cancel_btn = lv_btn_create(panel);
     lv_obj_set_size(cancel_btn, (panel_width - 36) / 2, 44);
-    lv_obj_align(cancel_btn, LV_ALIGN_TOP_LEFT, 0, 132);
+    lv_obj_align(cancel_btn, LV_ALIGN_TOP_LEFT, 0, 162);
     lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x7a3241), 0);
     lv_obj_set_style_bg_opa(cancel_btn, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(cancel_btn, 8, 0);
@@ -251,7 +280,7 @@ void WifiManagerScreen::CreatePasswordDialog() {
 
     lv_obj_t* connect_btn = lv_btn_create(panel);
     lv_obj_set_size(connect_btn, (panel_width - 36) / 2, 44);
-    lv_obj_align(connect_btn, LV_ALIGN_TOP_RIGHT, 0, 132);
+    lv_obj_align(connect_btn, LV_ALIGN_TOP_RIGHT, 0, 162);
     lv_obj_set_style_bg_color(connect_btn, lv_color_hex(0x228b5a), 0);
     lv_obj_set_style_bg_opa(connect_btn, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(connect_btn, 8, 0);
@@ -263,19 +292,14 @@ void WifiManagerScreen::CreatePasswordDialog() {
     lv_obj_set_style_text_color(connect_label, lv_color_white(), 0);
     lv_obj_center(connect_label);
 
-    static const char* key_map[] = {
-        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
-        "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "\n",
-        "a", "s", "d", "f", "g", "h", "j", "k", "l", "\n",
-        "z", "x", "c", "v", "b", "n", "m", "\n",
-        "Space", "Del", "Clear", "Done", ""
-    };
     password_keypad_ = lv_buttonmatrix_create(password_modal_);
     lv_obj_set_size(password_keypad_, LV_HOR_RES, LV_VER_RES / 2);
     lv_obj_align(password_keypad_, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_buttonmatrix_set_map(password_keypad_, key_map);
+    lv_buttonmatrix_set_map(password_keypad_, kPasswordKeyMapLower);
     lv_buttonmatrix_set_button_ctrl_all(password_keypad_, LV_BUTTONMATRIX_CTRL_CLICK_TRIG);
     lv_obj_add_event_cb(password_keypad_, OnPasswordKeypadClicked, LV_EVENT_VALUE_CHANGED, this);
+
+    UpdatePasswordVisibilityUi();
 }
 
 bool WifiManagerScreen::EnsureWifiReady() {
@@ -708,6 +732,10 @@ void WifiManagerScreen::ShowPasswordDialog(const std::string& ssid, const std::s
     if (!password_modal_ || !password_textarea_ || !password_ssid_label_) {
         return;
     }
+    password_shift_enabled_ = false;
+    UpdatePasswordKeypadMap();
+    UpdatePasswordVisibilityUi();
+
     selected_ssid_ = ssid;
     lv_label_set_text_fmt(password_ssid_label_, "SSID: %s", ssid.c_str());
     lv_textarea_set_text(password_textarea_, preset_password.c_str());
@@ -738,6 +766,26 @@ void WifiManagerScreen::SubmitPasswordConnect() {
     std::string target_ssid = selected_ssid_;
     HidePasswordDialog();
     RequestConnection(target_ssid, password);
+}
+
+void WifiManagerScreen::UpdatePasswordKeypadMap() {
+    if (!password_keypad_) {
+        return;
+    }
+    lv_buttonmatrix_set_map(password_keypad_, password_shift_enabled_ ? kPasswordKeyMapUpper : kPasswordKeyMapLower);
+    lv_buttonmatrix_set_button_ctrl_all(password_keypad_, LV_BUTTONMATRIX_CTRL_CLICK_TRIG);
+}
+
+void WifiManagerScreen::UpdatePasswordVisibilityUi() {
+    if (password_textarea_) {
+        lv_textarea_set_password_mode(password_textarea_, !password_visible_);
+    }
+    if (password_visibility_label_) {
+        lv_label_set_text(password_visibility_label_,
+                          password_visible_ ? "Password: Visible (tap to hide)"
+                                            : "Password: Hidden (tap to show)");
+        lv_obj_center(password_visibility_label_);
+    }
 }
 
 void WifiManagerScreen::OnCloseButtonClicked(lv_event_t* e) {
@@ -812,6 +860,15 @@ void WifiManagerScreen::OnPasswordCancelClicked(lv_event_t* e) {
     }
 }
 
+void WifiManagerScreen::OnPasswordVisibilityClicked(lv_event_t* e) {
+    auto* screen = static_cast<WifiManagerScreen*>(lv_event_get_user_data(e));
+    if (!screen) {
+        return;
+    }
+    screen->password_visible_ = !screen->password_visible_;
+    screen->UpdatePasswordVisibilityUi();
+}
+
 void WifiManagerScreen::OnPasswordKeypadClicked(lv_event_t* e) {
     auto* screen = static_cast<WifiManagerScreen*>(lv_event_get_user_data(e));
     if (!screen || !screen->password_textarea_) {
@@ -829,7 +886,10 @@ void WifiManagerScreen::OnPasswordKeypadClicked(lv_event_t* e) {
         return;
     }
 
-    if (strcmp(key, "Del") == 0) {
+    if (strcmp(key, "Shift") == 0) {
+        screen->password_shift_enabled_ = !screen->password_shift_enabled_;
+        screen->UpdatePasswordKeypadMap();
+    } else if (strcmp(key, "Del") == 0) {
         lv_textarea_delete_char(screen->password_textarea_);
     } else if (strcmp(key, "Clear") == 0) {
         lv_textarea_set_text(screen->password_textarea_, "");

@@ -53,6 +53,8 @@ private:
     lv_obj_t* password_ssid_label_ = nullptr;
     lv_obj_t* password_textarea_ = nullptr;
     lv_obj_t* password_keypad_ = nullptr;
+    lv_obj_t* password_visibility_btn_ = nullptr;
+    lv_obj_t* password_visibility_label_ = nullptr;
 
     // State
     lv_timer_t* status_timer_ = nullptr;
@@ -65,6 +67,8 @@ private:
     bool is_visible_ = false;
     bool scan_in_progress_ = false;
     bool connect_in_progress_ = false;
+    bool password_shift_enabled_ = false;
+    bool password_visible_ = false;
     CloseCallback close_callback_;
 
     // Internal behavior
@@ -87,6 +91,8 @@ private:
     void ShowPasswordDialog(const std::string& ssid, const std::string& preset_password = "");
     void HidePasswordDialog();
     void SubmitPasswordConnect();
+    void UpdatePasswordKeypadMap();
+    void UpdatePasswordVisibilityUi();
 
     // Async callbacks
     static void ScanTask(void* arg);
@@ -99,6 +105,7 @@ private:
     static void OnScanItemClicked(lv_event_t* e);
     static void OnPasswordConnectClicked(lv_event_t* e);
     static void OnPasswordCancelClicked(lv_event_t* e);
+    static void OnPasswordVisibilityClicked(lv_event_t* e);
     static void OnPasswordKeypadClicked(lv_event_t* e);
     static void OnStatusTimer(lv_timer_t* timer);
 };
