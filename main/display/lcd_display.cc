@@ -12,6 +12,7 @@
 #include <esp_err.h>
 #include <esp_lvgl_port.h>
 #include <esp_psram.h>
+#include <esp_sleep.h>
 #include <cstring>
 #include <src/misc/cache/lv_cache.h>
 
@@ -1091,6 +1092,116 @@ void LcdDisplay::SetupUI() {
         }
         ESP_LOGI(TAG, "Calling wifi_manager_screen_->Show()");
         display->wifi_manager_screen_->Show();
+    }, LV_EVENT_CLICKED, this);
+
+    // Power button (right of WiFi button)
+    power_btn_ = lv_btn_create(toolbar_);
+    lv_obj_set_size(power_btn_, 88, 88);
+    lv_obj_set_style_bg_color(power_btn_, lv_color_hex(0x7a3241), 0);
+    lv_obj_set_style_bg_opa(power_btn_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(power_btn_, 8, 0);
+    lv_obj_set_style_border_width(power_btn_, 0, 0);
+    lv_obj_set_style_pad_all(power_btn_, 0, 0);
+    lv_obj_align_to(power_btn_, wifi_btn_, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+
+    lv_obj_t* power_label = lv_label_create(power_btn_);
+    lv_label_set_text(power_label, "OFF");
+    lv_obj_set_style_text_font(power_label, text_font, 0);
+    lv_obj_set_style_text_color(power_label, lv_color_white(), 0);
+    lv_obj_center(power_label);
+
+    poweroff_confirm_popup_ = lv_obj_create(screen);
+    lv_obj_set_size(poweroff_confirm_popup_, LV_HOR_RES, LV_VER_RES);
+    lv_obj_align(poweroff_confirm_popup_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(poweroff_confirm_popup_, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(poweroff_confirm_popup_, LV_OPA_70, 0);
+    lv_obj_set_style_radius(poweroff_confirm_popup_, 0, 0);
+    lv_obj_set_style_border_width(poweroff_confirm_popup_, 0, 0);
+    lv_obj_set_style_pad_all(poweroff_confirm_popup_, 0, 0);
+    lv_obj_clear_flag(poweroff_confirm_popup_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(poweroff_confirm_popup_, LV_OBJ_FLAG_HIDDEN);
+
+    int power_panel_width = LV_HOR_RES - 80;
+    if (power_panel_width > 420) {
+        power_panel_width = 420;
+    }
+    if (power_panel_width < 280) {
+        power_panel_width = 280;
+    }
+
+    lv_obj_t* power_panel = lv_obj_create(poweroff_confirm_popup_);
+    lv_obj_set_size(power_panel, power_panel_width, 180);
+    lv_obj_align(power_panel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(power_panel, lv_color_hex(0x1a274a), 0);
+    lv_obj_set_style_bg_opa(power_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(power_panel, 10, 0);
+    lv_obj_set_style_border_width(power_panel, 0, 0);
+    lv_obj_set_style_pad_all(power_panel, 12, 0);
+    lv_obj_clear_flag(power_panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* power_title = lv_label_create(power_panel);
+    lv_label_set_text(power_title, "Shut down device?");
+    lv_obj_set_style_text_color(power_title, lv_color_white(), 0);
+    lv_obj_set_style_text_font(power_title, text_font, 0);
+    lv_obj_align(power_title, LV_ALIGN_TOP_MID, 0, 8);
+
+    lv_obj_t* power_hint = lv_label_create(power_panel);
+    lv_label_set_text(power_hint, "Press Shutdown to power off.");
+    lv_obj_set_style_text_color(power_hint, lv_color_hex(0xb9d1ff), 0);
+    lv_obj_set_style_text_font(power_hint, text_font, 0);
+    lv_obj_align(power_hint, LV_ALIGN_TOP_MID, 0, 46);
+
+    lv_obj_t* power_cancel_btn = lv_btn_create(power_panel);
+    lv_obj_set_size(power_cancel_btn, (power_panel_width - 36) / 2, 44);
+    lv_obj_align(power_cancel_btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(power_cancel_btn, lv_color_hex(0x3a3a5e), 0);
+    lv_obj_set_style_bg_opa(power_cancel_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(power_cancel_btn, 8, 0);
+    lv_obj_set_style_border_width(power_cancel_btn, 0, 0);
+
+    lv_obj_t* power_cancel_label = lv_label_create(power_cancel_btn);
+    lv_label_set_text(power_cancel_label, "Cancel");
+    lv_obj_set_style_text_color(power_cancel_label, lv_color_white(), 0);
+    lv_obj_center(power_cancel_label);
+
+    lv_obj_t* power_shutdown_btn = lv_btn_create(power_panel);
+    lv_obj_set_size(power_shutdown_btn, (power_panel_width - 36) / 2, 44);
+    lv_obj_align(power_shutdown_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(power_shutdown_btn, lv_color_hex(0xb74141), 0);
+    lv_obj_set_style_bg_opa(power_shutdown_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(power_shutdown_btn, 8, 0);
+    lv_obj_set_style_border_width(power_shutdown_btn, 0, 0);
+
+    lv_obj_t* power_shutdown_label = lv_label_create(power_shutdown_btn);
+    lv_label_set_text(power_shutdown_label, "Shutdown");
+    lv_obj_set_style_text_color(power_shutdown_label, lv_color_white(), 0);
+    lv_obj_center(power_shutdown_label);
+
+    lv_obj_add_event_cb(power_btn_, [](lv_event_t* e) {
+        ESP_LOGI(TAG, "Power button clicked");
+        auto* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
+        if (display == nullptr || display->poweroff_confirm_popup_ == nullptr) {
+            ESP_LOGE(TAG, "Power popup is not initialized");
+            return;
+        }
+        lv_obj_remove_flag(display->poweroff_confirm_popup_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(display->poweroff_confirm_popup_);
+    }, LV_EVENT_CLICKED, this);
+
+    lv_obj_add_event_cb(power_cancel_btn, [](lv_event_t* e) {
+        auto* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
+        if (display && display->poweroff_confirm_popup_) {
+            lv_obj_add_flag(display->poweroff_confirm_popup_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }, LV_EVENT_CLICKED, this);
+
+    lv_obj_add_event_cb(power_shutdown_btn, [](lv_event_t* e) {
+        auto* display = static_cast<LcdDisplay*>(lv_event_get_user_data(e));
+        if (display && display->poweroff_confirm_popup_) {
+            lv_obj_add_flag(display->poweroff_confirm_popup_, LV_OBJ_FLAG_HIDDEN);
+        }
+        ESP_LOGI(TAG, "User confirmed shutdown, entering deep sleep");
+        esp_deep_sleep_start();
     }, LV_EVENT_CLICKED, this);
 
     // Brightness increase button (left side of toolbar2)

@@ -54,6 +54,8 @@ protected:
     lv_obj_t* camera_btn_ = nullptr;
     lv_obj_t* microphone_btn_ = nullptr;
     lv_obj_t* wifi_btn_ = nullptr;
+    lv_obj_t* power_btn_ = nullptr;
+    lv_obj_t* poweroff_confirm_popup_ = nullptr;
     lv_obj_t* brightness_up_btn_ = nullptr;
     lv_obj_t* brightness_down_btn_ = nullptr;
     lv_obj_t* brightness_label_ = nullptr;
