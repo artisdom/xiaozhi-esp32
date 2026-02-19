@@ -24,7 +24,7 @@ static const char* kPasswordKeyMapLower[] = {
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
     "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "\n",
     "a", "s", "d", "f", "g", "h", "j", "k", "l", "\n",
-    "Shift", "z", "x", "c", "v", "b", "n", "m", "\n",
+    "Shift", "Sym", "z", "x", "c", "v", "b", "n", "m", "\n",
     "Space", "Del", "Clear", "Done", ""
 };
 
@@ -32,7 +32,15 @@ static const char* kPasswordKeyMapUpper[] = {
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
     "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "\n",
     "A", "S", "D", "F", "G", "H", "J", "K", "L", "\n",
-    "Shift", "Z", "X", "C", "V", "B", "N", "M", "\n",
+    "Shift", "Sym", "Z", "X", "C", "V", "B", "N", "M", "\n",
+    "Space", "Del", "Clear", "Done", ""
+};
+
+static const char* kPasswordKeyMapSymbols[] = {
+    "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "\n",
+    "-", "_", "=", "+", "[", "]", "{", "}", ";", ":", "\n",
+    "'", "\"", ",", ".", "/", "?", "\\", "|", "~", "`", "\n",
+    "ABC", "<", ">", "\n",
     "Space", "Del", "Clear", "Done", ""
 };
 
@@ -733,6 +741,7 @@ void WifiManagerScreen::ShowPasswordDialog(const std::string& ssid, const std::s
         return;
     }
     password_shift_enabled_ = false;
+    password_symbols_enabled_ = false;
     UpdatePasswordKeypadMap();
     UpdatePasswordVisibilityUi();
 
@@ -772,7 +781,11 @@ void WifiManagerScreen::UpdatePasswordKeypadMap() {
     if (!password_keypad_) {
         return;
     }
-    lv_buttonmatrix_set_map(password_keypad_, password_shift_enabled_ ? kPasswordKeyMapUpper : kPasswordKeyMapLower);
+    if (password_symbols_enabled_) {
+        lv_buttonmatrix_set_map(password_keypad_, kPasswordKeyMapSymbols);
+    } else {
+        lv_buttonmatrix_set_map(password_keypad_, password_shift_enabled_ ? kPasswordKeyMapUpper : kPasswordKeyMapLower);
+    }
     lv_buttonmatrix_set_button_ctrl_all(password_keypad_, LV_BUTTONMATRIX_CTRL_CLICK_TRIG);
 }
 
@@ -888,6 +901,12 @@ void WifiManagerScreen::OnPasswordKeypadClicked(lv_event_t* e) {
 
     if (strcmp(key, "Shift") == 0) {
         screen->password_shift_enabled_ = !screen->password_shift_enabled_;
+        screen->UpdatePasswordKeypadMap();
+    } else if (strcmp(key, "Sym") == 0) {
+        screen->password_symbols_enabled_ = true;
+        screen->UpdatePasswordKeypadMap();
+    } else if (strcmp(key, "ABC") == 0) {
+        screen->password_symbols_enabled_ = false;
         screen->UpdatePasswordKeypadMap();
     } else if (strcmp(key, "Del") == 0) {
         lv_textarea_delete_char(screen->password_textarea_);

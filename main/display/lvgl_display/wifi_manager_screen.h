@@ -68,6 +68,7 @@ private:
     bool scan_in_progress_ = false;
     bool connect_in_progress_ = false;
     bool password_shift_enabled_ = false;
+    bool password_symbols_enabled_ = false;
     bool password_visible_ = false;
     CloseCallback close_callback_;
 
