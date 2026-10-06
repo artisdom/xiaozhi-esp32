@@ -50,8 +50,10 @@ private:
     MusicScreen music_screen_ = MusicScreen::Files;  // Which player screen is shown.
     int64_t music_last_input_us_ = 0;                // Last button press, for the DJ auto-enter.
     // DJ screen.
-    int dj_bank_ = 0;  // Pads on L/R: bank 0 = kick/snare, bank 1 = hat/horn.
-    std::atomic<int64_t> dj_pad_time_us_[2] = {0, 0};
+    int dj_cursor_ = 0;  // Selected DJ item: pads first, then effects.
+    std::atomic<int64_t> dj_pad_time_us_[box2_music::DjEngine::kPadCount] = {};
+    int64_t last_volume_hold_us_ = 0;
+    uint8_t q_idle_level_ = 1;  // IO-expander level of the Q key while released.
     uint32_t dj_last_frames_ = 0, dj_last_beats_ = 0;
     int dj_idle_ticks_ = 0, dj_beat_ticks_ = 0;
     std::array<float, box2_music::DjEngine::kBands> dj_bands_ = {};
@@ -277,12 +279,12 @@ private:
         if (dj_beat_ticks_ > 0)
             --dj_beat_ticks_;
         v.bpm = snap.bpm;
-        v.fx = DjEngine::FxName(music_player_.Dj().GetFx());
+        v.fx = music_player_.Dj().GetFx();
+        v.selected = dj_cursor_;
         const int64_t now = esp_timer_get_time();
-        for (int i = 0; i < 2; ++i) {
-            v.pads[i] = DjEngine::PadName(dj_bank_ * 2 + i);
-            v.pad_flash[i] = now - dj_pad_time_us_[i].load() < 150000;
-        }
+        for (int i = 0; i < DjEngine::kPadCount; ++i)
+            if (now - dj_pad_time_us_[i].load() < 150000)
+                v.pad_flash |= 1u << i;
         return v;
     }
 
@@ -351,41 +353,92 @@ private:
         RefreshMusicView(false);
     }
 
-    // Hold L: files -> now playing -> DJ -> files.
-    void CycleMusicScreen() {
+    // M double-click: one screen forward (files -> now playing -> DJ).
+    void ScreenForward() {
         MusicInput();
-        switch (music_screen_) {
-        case MusicScreen::Files:
+        if (music_screen_ == MusicScreen::Files)
             music_screen_ = MusicScreen::NowPlaying;
-            break;
-        case MusicScreen::NowPlaying:
+        else if (music_screen_ == MusicScreen::NowPlaying)
             music_screen_ = MusicScreen::Dj;
-            break;
-        case MusicScreen::Dj: {
+        RefreshMusicView(true);
+    }
+
+    // Q: DJ -> now playing -> files -> up through the folders -> exit.
+    void ScreenBack() {
+        MusicInput();
+        if (music_screen_ == MusicScreen::Dj) {
+            music_screen_ = MusicScreen::NowPlaying;
+        } else if (music_screen_ == MusicScreen::NowPlaying) {
             music_screen_ = MusicScreen::Files;
             auto state = music_player_.Snapshot();
             music_dir_ = box2_music::ParentDirectory(state.filename);
             RebuildBrowse(state.filename);
-            break;
-        }
+        } else if (!music_dir_.empty()) {
+            BrowseUp();
+            return;
+        } else {
+            CloseMusicView();
+            return;
         }
         RefreshMusicView(true);
     }
 
-    // DJ screen: trigger a sampler pad in the current bank (0 = L, 1 = R).
-    void TriggerDjPad(int side) {
-        music_player_.Dj().TriggerPad(dj_bank_ * 2 + side);
-        dj_pad_time_us_[side].store(esp_timer_get_time());
+    // DJ screen: fire the highlighted pad or toggle the highlighted effect. Safe from any task.
+    void DjActivate() {
+        using box2_music::DjEngine;
+        if (dj_cursor_ < DjEngine::kPadCount) {
+            music_player_.Dj().TriggerPad(dj_cursor_);
+            dj_pad_time_us_[dj_cursor_].store(esp_timer_get_time());
+        } else {
+            int fx = dj_cursor_ - DjEngine::kPadCount + 1;
+            music_player_.Dj().SetFx(music_player_.Dj().GetFx() == fx ? DjEngine::kFxOff : fx);
+        }
+    }
+
+    // Move through the DJ items in reading order (pads, then effects).
+    void DjMove(int delta) {
+        MusicInput();
+        dj_cursor_ = (dj_cursor_ + MusicDisplay::kDjItems + delta) % MusicDisplay::kDjItems;
+        RefreshMusicView(true);
+    }
+
+    // Move between the two pad rows and the effect row, keeping the column.
+    void DjMoveRow(int direction) {
+        MusicInput();
+        using box2_music::DjEngine;
+        constexpr int kPadRows = DjEngine::kPadCount / MusicDisplay::kDjPadColumns;
+        const bool on_fx = dj_cursor_ >= DjEngine::kPadCount;
+        int row = on_fx ? kPadRows : dj_cursor_ / MusicDisplay::kDjPadColumns;
+        int column = on_fx ? std::min(dj_cursor_ - DjEngine::kPadCount, MusicDisplay::kDjPadColumns - 1)
+                           : dj_cursor_ % MusicDisplay::kDjPadColumns;
+        row = (row + direction + kPadRows + 1) % (kPadRows + 1);
+        dj_cursor_ = row == kPadRows ? DjEngine::kPadCount + column
+                                     : row * MusicDisplay::kDjPadColumns + column;
+        RefreshMusicView(true);
+    }
+
+    // Hold L/R inside the player: volume down/up, repeating while held.
+    void RegisterVolumeHold(button_handle_t handle, bool up) {
+        struct Context {
+            atk_dnesp32s3_box2_wifi* self;
+            bool up;
+        };
+        iot_button_register_cb(
+            handle, BUTTON_LONG_PRESS_HOLD, nullptr,
+            [](void*, void* data) {
+                auto* ctx = static_cast<Context*>(data);
+                int64_t now = esp_timer_get_time();
+                if (!ctx->self->music_view_ || now - ctx->self->last_volume_hold_us_ < 250000)
+                    return;
+                ctx->self->last_volume_hold_us_ = now;
+                ctx->self->audio_volume_change(ctx->up);
+            },
+            new Context{this, up});  // Lives as long as the board.
     }
 
     void ShowNowPlayingScreen() {
         MusicInput();
         music_screen_ = MusicScreen::NowPlaying;
-        RefreshMusicView(true);
-    }
-
-    void NextDjEffect() {
-        music_player_.Dj().NextFx();
         RefreshMusicView(true);
     }
 
@@ -462,6 +515,9 @@ private:
 
         button_config_t r_btn_cfg = {.long_press_time = 800, .short_press_time = 500};
 
+        button_config_t q_btn_cfg = {.long_press_time = 800, .short_press_time = 500};
+        button_driver_t* xio_q_btn_driver_ = nullptr;
+        button_handle_t q_btn_handle = NULL;
         button_driver_t* xio_l_btn_driver_ = nullptr;
         button_driver_t* xio_m_btn_driver_ = nullptr;
 
@@ -476,6 +532,17 @@ private:
         };
         ESP_ERROR_CHECK(iot_button_create(&l_btn_cfg, xio_l_btn_driver_, &l_btn_handle));
 
+        // The Q key's polarity is not documented (L is active-low, M active-high), so treat the
+        // level seen at start-up, when the key is not pressed, as "released".
+        q_idle_level_ = IoExpanderGetLevel(XIO_KEY_Q);
+        ESP_LOGI(TAG, "Q key idle level: %d", q_idle_level_);
+        xio_q_btn_driver_ = (button_driver_t*)calloc(1, sizeof(button_driver_t));
+        xio_q_btn_driver_->enable_power_save = false;
+        xio_q_btn_driver_->get_key_level = [](button_driver_t* button_driver) -> uint8_t {
+            return instance_->IoExpanderGetLevel(XIO_KEY_Q) != instance_->q_idle_level_;
+        };
+        ESP_ERROR_CHECK(iot_button_create(&q_btn_cfg, xio_q_btn_driver_, &q_btn_handle));
+
         xio_m_btn_driver_ = (button_driver_t*)calloc(1, sizeof(button_driver_t));
         xio_m_btn_driver_->enable_power_save = false;
         xio_m_btn_driver_->get_key_level = [](button_driver_t* button_driver) -> uint8_t {
@@ -489,57 +556,101 @@ private:
                                       .disable_pull = false};
         ESP_ERROR_CHECK(iot_button_new_gpio_device(&r_btn_cfg, &r_cfg, &r_btn_handle));
 
-        // Pads fire on press, not on click, so they are not delayed by double-click detection.
+        // Every press restarts the DJ idle timer; the DJ pad fires on press, not on click,
+        // so it is not delayed by double-click detection.
         iot_button_register_cb(
             l_btn_handle, BUTTON_PRESS_DOWN, nullptr,
-            [](void*, void* data) {
-                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(data);
-                self->MusicInput();
-                if (self->music_view_ && self->music_screen_ == MusicScreen::Dj)
-                    self->TriggerDjPad(0);
-            },
+            [](void*, void* data) { static_cast<atk_dnesp32s3_box2_wifi*>(data)->MusicInput(); },
             this);
         iot_button_register_cb(
             r_btn_handle, BUTTON_PRESS_DOWN, nullptr,
+            [](void*, void* data) { static_cast<atk_dnesp32s3_box2_wifi*>(data)->MusicInput(); },
+            this);
+        iot_button_register_cb(
+            q_btn_handle, BUTTON_PRESS_DOWN, nullptr,
+            [](void*, void* data) { static_cast<atk_dnesp32s3_box2_wifi*>(data)->MusicInput(); },
+            this);
+        iot_button_register_cb(
+            m_btn_handle, BUTTON_PRESS_DOWN, nullptr,
             [](void*, void* data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(data);
                 self->MusicInput();
                 if (self->music_view_ && self->music_screen_ == MusicScreen::Dj)
-                    self->TriggerDjPad(1);
-            },
-            this);
-        iot_button_register_cb(
-            m_btn_handle, BUTTON_PRESS_DOWN, nullptr,
-            [](void*, void* data) { static_cast<atk_dnesp32s3_box2_wifi*>(data)->MusicInput(); },
-            this);
-
-        iot_button_register_cb(
-            l_btn_handle, BUTTON_SINGLE_CLICK, nullptr,
-            [](void* button_handle, void* usr_data) {
-                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
-                self->power_save_timer_->WakeUp();
-                if (self->music_view_ && self->music_screen_ == MusicScreen::Files)
-                    Application::GetInstance().Schedule([self]() { self->MoveBrowseCursor(-1); });
-                else if (!(self->music_view_ && self->music_screen_ == MusicScreen::Dj))
-                    self->audio_volume_change(false);  // L is a sampler pad on the DJ screen.
+                    self->DjActivate();
             },
             this);
 
-        iot_button_register_cb(
-            l_btn_handle, BUTTON_LONG_PRESS_START, nullptr,
-            [](void* button_handle, void* usr_data) {
-                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
-                self->power_save_timer_->WakeUp();
-                if (self->music_view_)
-                    Application::GetInstance().Schedule([self]() { self->CycleMusicScreen(); });
-                else
-                    self->audio_volume_minimum();
-            },
-            this);
+        // L / R single click: navigate in the player, volume elsewhere.
+        for (int direction : {-1, 1}) {
+            struct Context {
+                atk_dnesp32s3_box2_wifi* self;
+                int direction;
+            };
+            auto* ctx = new Context{this, direction};  // Lives as long as the board.
+            iot_button_register_cb(
+                direction < 0 ? l_btn_handle : r_btn_handle, BUTTON_SINGLE_CLICK, nullptr,
+                [](void*, void* data) {
+                    auto* c = static_cast<Context*>(data);
+                    auto self = c->self;
+                    int direction = c->direction;
+                    self->power_save_timer_->WakeUp();
+                    if (!self->music_view_) {
+                        self->audio_volume_change(direction > 0);
+                        return;
+                    }
+                    Application::GetInstance().Schedule([self, direction]() {
+                        switch (self->music_screen_) {
+                        case MusicScreen::Files:
+                            self->MoveBrowseCursor(direction);
+                            break;
+                        case MusicScreen::NowPlaying:
+                            self->SkipMusic(direction);  // Previous / next track.
+                            break;
+                        case MusicScreen::Dj:
+                            self->DjMove(direction);
+                            break;
+                        }
+                    });
+                },
+                ctx);
+            // L / R double click: previous/next track outside the player, DJ row up/down.
+            iot_button_register_cb(
+                direction < 0 ? l_btn_handle : r_btn_handle, BUTTON_DOUBLE_CLICK, nullptr,
+                [](void*, void* data) {
+                    auto* c = static_cast<Context*>(data);
+                    auto self = c->self;
+                    int direction = c->direction;
+                    if (!self->music_view_) {
+                        self->SkipMusic(direction);
+                    } else if (self->music_screen_ == MusicScreen::Dj) {
+                        Application::GetInstance().Schedule(
+                            [self, direction]() { self->DjMoveRow(direction); });
+                    }
+                },
+                ctx);
+            // Hold L / R: volume in the player (repeats while held), mute / maximum elsewhere.
+            iot_button_register_cb(
+                direction < 0 ? l_btn_handle : r_btn_handle, BUTTON_LONG_PRESS_START, nullptr,
+                [](void*, void* data) {
+                    auto* c = static_cast<Context*>(data);
+                    auto self = c->self;
+                    self->power_save_timer_->WakeUp();
+                    if (self->music_view_)
+                        self->audio_volume_change(c->direction > 0);
+                    else if (c->direction < 0)
+                        self->audio_volume_minimum();
+                    else
+                        self->audio_volume_maxmum();
+                },
+                ctx);
+        }
+        RegisterVolumeHold(l_btn_handle, false);
+        RegisterVolumeHold(r_btn_handle, true);
 
+        // M single click: select / play-pause; the DJ screen acts on press instead.
         iot_button_register_cb(
             m_btn_handle, BUTTON_SINGLE_CLICK, nullptr,
-            [](void* button_handle, void* usr_data) {
+            [](void*, void* usr_data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
                 Application::GetInstance().Schedule([self]() {
                     self->power_save_timer_->WakeUp();
@@ -548,9 +659,7 @@ private:
                         self->MusicInput();
                         if (self->music_screen_ == MusicScreen::Files)
                             self->ActivateBrowseEntry();
-                        else if (self->music_screen_ == MusicScreen::Dj)
-                            self->NextDjEffect();
-                        else
+                        else if (self->music_screen_ == MusicScreen::NowPlaying)
                             self->TogglePlayPause();
                     } else if (state.busy || state.phase == "paused") {
                         self->OpenMusicView();
@@ -560,41 +669,18 @@ private:
             },
             this);
 
+        // M double click: open the player, or go one screen forward inside it.
         iot_button_register_cb(
             m_btn_handle, BUTTON_DOUBLE_CLICK, nullptr,
-            [](void* button_handle, void* usr_data) {
+            [](void*, void* usr_data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
                 Application::GetInstance().Schedule([self]() {
                     self->power_save_timer_->WakeUp();
-                    auto state = self->music_player_.Snapshot();
-                    if (self->music_view_ || state.busy || state.phase == "paused") {
-                        self->CloseMusicView();
-                    } else {
+                    if (self->music_view_)
+                        self->ScreenForward();
+                    else
                         self->OpenMusicView();
-                    }
                 });
-            },
-            this);
-
-        iot_button_register_cb(
-            l_btn_handle, BUTTON_DOUBLE_CLICK, nullptr,
-            [](void*, void* data) {
-                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(data);
-                if (self->music_view_ && self->music_screen_ == MusicScreen::Files)
-                    Application::GetInstance().Schedule([self]() { self->BrowseUp(); });
-                else if (!(self->music_view_ && self->music_screen_ == MusicScreen::Dj))
-                    self->SkipMusic(-1);
-            },
-            this);
-        iot_button_register_cb(
-            r_btn_handle, BUTTON_DOUBLE_CLICK, nullptr,
-            [](void*, void* data) {
-                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(data);
-                if (self->music_view_ && self->music_screen_ == MusicScreen::Files)
-                    Application::GetInstance().Schedule(
-                        [self]() { self->ShowNowPlayingScreen(); });
-                else if (!(self->music_view_ && self->music_screen_ == MusicScreen::Dj))
-                    self->SkipMusic(1);
             },
             this);
 
@@ -625,27 +711,31 @@ private:
             },
             this);
 
+        // Q: back / up one level; hold Q leaves the player (stopping the music).
         iot_button_register_cb(
-            r_btn_handle, BUTTON_SINGLE_CLICK, nullptr,
-            [](void* button_handle, void* usr_data) {
+            q_btn_handle, BUTTON_SINGLE_CLICK, nullptr,
+            [](void*, void* usr_data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
-                self->power_save_timer_->WakeUp();
-                if (self->music_view_ && self->music_screen_ == MusicScreen::Files)
-                    Application::GetInstance().Schedule([self]() { self->MoveBrowseCursor(1); });
-                else if (!(self->music_view_ && self->music_screen_ == MusicScreen::Dj))
-                    self->audio_volume_change(true);  // R is a sampler pad on the DJ screen.
+                Application::GetInstance().Schedule([self]() {
+                    self->power_save_timer_->WakeUp();
+                    auto state = self->music_player_.Snapshot();
+                    if (self->music_view_)
+                        self->ScreenBack();
+                    else if (state.busy || state.phase == "paused")
+                        self->CloseMusicView();
+                });
             },
             this);
-
         iot_button_register_cb(
-            r_btn_handle, BUTTON_LONG_PRESS_START, nullptr,
-            [](void* button_handle, void* usr_data) {
+            q_btn_handle, BUTTON_LONG_PRESS_START, nullptr,
+            [](void*, void* usr_data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
-                self->power_save_timer_->WakeUp();
-                if (self->music_view_ && self->music_screen_ == MusicScreen::Dj)
-                    self->dj_bank_ ^= 1;  // Switch between kick/snare and hat/horn.
-                else
-                    self->audio_volume_maxmum();
+                Application::GetInstance().Schedule([self]() {
+                    self->power_save_timer_->WakeUp();
+                    auto state = self->music_player_.Snapshot();
+                    if (self->music_view_ || state.busy || state.phase == "paused")
+                        self->CloseMusicView();
+                });
             },
             this);
     }

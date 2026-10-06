@@ -26,7 +26,17 @@ public:
     static constexpr int kBands = 12;
     static constexpr int kWave = 48;
     enum Fx { kFxOff, kFxLowpass, kFxHighpass, kFxEcho, kFxCrush, kFxGate, kFxCount };
-    enum Pad { kPadKick, kPadSnare, kPadHat, kPadHorn, kPadCount };
+    enum Pad {
+        kPadKick,
+        kPadSnare,
+        kPadHat,
+        kPadClap,
+        kPadHorn,
+        kPadLaser,
+        kPadBass,
+        kPadSiren,
+        kPadCount
+    };
 
     struct Snapshot {
         uint8_t bands[kBands] = {};
@@ -37,11 +47,11 @@ public:
     };
 
     static const char* FxName(int fx) {
-        static const char* const names[] = {"OFF", "LPF", "HPF", "ECHO", "CRUSH", "GATE"};
+        static const char* const names[] = {"OFF", "LPF", "HPF", "ECHO", "BIT", "GATE"};
         return names[std::clamp(fx, 0, int(kFxCount) - 1)];
     }
     static const char* PadName(int pad) {
-        static const char* const names[] = {"KICK", "SNARE", "HAT", "HORN"};
+        static const char* const names[] = {"KICK", "SNARE", "HAT", "CLAP", "HORN", "LASER", "BASS", "SIREN"};
         return names[std::clamp(pad, 0, int(kPadCount) - 1)];
     }
 
@@ -170,11 +180,16 @@ private:
             v = Voice{};
             v.active = true;
             v.env = v.env2 = 1;
-            v.freq = pad == kPadKick ? 120.0f : 0.0f;  // Kick: pitch drop above 45 Hz.
+            // Initial pitch offsets of the sweeping pads.
+            v.freq = pad == kPadKick ? 120.0f : pad == kPadLaser ? 1800.0f : pad == kPadBass ? 50.0f : 0.0f;
         }
     }
 
-    // One sample of a pad voice in -1..1; deactivates it when finished.
+    // Decay rates (1/s) per pad: {fast, slow}; meaning depends on the pad, see VoiceSample().
+    static constexpr float kRates[kPadCount][2] = {{30, 9}, {16, 28}, {55, 0}, {25, 0},
+                                                   {12, 0}, {10, 5},  {20, 5}, {0, 3}};
+
+    // One sample of a pad voice in about -1..1; deactivates it when finished.
     float VoiceSample(int pad, Voice& v, float fs, float k_fast, float k_slow) {
         float out = 0;
         const float t = float(v.n) / fs;
@@ -204,6 +219,15 @@ private:
                 v.active = false;
             break;
         }
+        case kPadClap:
+            // Three quick noise bursts followed by a short tail.
+            if (v.n == 0 || v.n == uint32_t(0.012f * fs) || v.n == uint32_t(0.024f * fs))
+                v.env = 1;
+            out = Noise() * v.env * 0.7f;
+            v.env *= k_fast;
+            if (t > 0.22f)
+                v.active = false;
+            break;
         case kPadHorn: {
             float gain = t < 0.01f ? t / 0.01f : v.env;
             if (t > 0.55f)
@@ -217,17 +241,48 @@ private:
                 v.active = false;
             break;
         }
+        case kPadLaser:
+            // Square wave sweeping down from about 2 kHz.
+            out = (std::sin(v.phase) >= 0 ? 0.3f : -0.3f) * v.env;
+            v.phase += kTwoPi * (200.0f + v.freq) / fs;
+            v.freq *= k_fast;
+            v.env *= k_slow;
+            if (t > 0.35f)
+                v.active = false;
+            break;
+        case kPadBass:
+            // 808-style sub drop with a little second harmonic.
+            out = (std::sin(v.phase) + 0.3f * std::sin(2 * v.phase)) * 0.8f * v.env;
+            v.phase += kTwoPi * (55.0f + v.freq) / fs;
+            v.freq *= k_fast;
+            v.env *= k_slow;
+            if (t > 0.7f)
+                v.active = false;
+            break;
+        case kPadSiren: {
+            float gain = t < 0.02f ? t / 0.02f : v.env;
+            if (t > 0.5f)
+                v.env *= k_slow;
+            out = std::sin(v.phase) * 0.5f * gain;
+            v.phase += kTwoPi * (850.0f + 350.0f * std::sin(kTwoPi * 3.0f * t)) / fs;
+            if (t > 0.8f)
+                v.active = false;
+            break;
         }
+        }
+        if (v.phase > 1000.0f * kTwoPi)  // Keep float phase precise.
+            v.phase = std::fmod(v.phase, kTwoPi);
         ++v.n;
         return out;
     }
 
     void ApplyEffectAndPads(int16_t* pcm, size_t count, float fs, int fx) {
         // Per-sample decay factors, computed once per frame.
-        const float kick_fast = std::exp(-30.0f / fs), kick_slow = std::exp(-9.0f / fs);
-        const float snare_fast = std::exp(-16.0f / fs), snare_slow = std::exp(-28.0f / fs);
-        const float hat_fast = std::exp(-55.0f / fs);
-        const float horn_fast = std::exp(-12.0f / fs);
+        float k_fast[kPadCount], k_slow[kPadCount];
+        for (int pad = 0; pad < kPadCount; ++pad) {
+            k_fast[pad] = std::exp(-kRates[pad][0] / fs);
+            k_slow[pad] = std::exp(-kRates[pad][1] / fs);
+        }
         const float lp_a = 1.0f - std::exp(-kTwoPi * 600.0f / fs);
         const float hp_a = 1.0f - std::exp(-kTwoPi * 1200.0f / fs);
         const int echo_len = std::min(kMaxEchoSamples, int(fs * 0.28f));
@@ -278,12 +333,7 @@ private:
                 Voice& v = voices_[pad];
                 if (!v.active)
                     continue;
-                float fast = pad == kPadKick    ? kick_fast
-                             : pad == kPadSnare ? snare_fast
-                             : pad == kPadHat   ? hat_fast
-                                                : horn_fast;
-                float slow = pad == kPadKick ? kick_slow : snare_slow;
-                y += VoiceSample(pad, v, fs, fast, slow) * 24000.0f;
+                y += VoiceSample(pad, v, fs, k_fast[pad], k_slow[pad]) * 24000.0f;
             }
             pcm[i] = int16_t(std::clamp(y, -32768.0f, 32767.0f));
         }

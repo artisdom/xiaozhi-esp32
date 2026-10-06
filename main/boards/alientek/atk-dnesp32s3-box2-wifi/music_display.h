@@ -21,9 +21,9 @@ struct MusicDjView {
     uint8_t bands[box2_music::DjEngine::kBands] = {};
     uint8_t wave[box2_music::DjEngine::kWave] = {};
     int bpm = 0;
-    std::string fx;       // Active effect name.
-    std::string pads[2];  // Sampler pads on L and R in the current bank.
-    bool pad_flash[2] = {false, false};
+    int fx = 0;            // Active effect (DjEngine::Fx).
+    int selected = 0;      // Highlighted item: pads first, then the effects (see below).
+    uint32_t pad_flash = 0;  // Bit per pad that was just triggered.
     bool beat = false;
 };
 
@@ -37,7 +37,11 @@ struct MusicBrowseView {
 
 class MusicDisplay : public SpiLcdDisplay {
 public:
+    static constexpr int kDjFxItems = box2_music::DjEngine::kFxCount - 1;  // Without OFF.
     static constexpr int kMaxListRows = 10;
+    // DJ items are numbered pads 0..kPadCount-1, then effects kPadCount.. (LPF, HPF, ...).
+    static constexpr int kDjItems = box2_music::DjEngine::kPadCount + kDjFxItems;
+    static constexpr int kDjPadColumns = 4;
 
     using SpiLcdDisplay::SpiLcdDisplay;
     void UpdateMusic(const MusicSnapshot& state, bool visible, int volume,
@@ -56,15 +60,18 @@ private:
     lv_obj_t* mode_ = nullptr;
     lv_obj_t* phase_ = nullptr;
     lv_obj_t* help_ = nullptr;
-    // DJ screen.
+    // DJ screen: a full-screen panel of its own.
+    lv_obj_t* dj_panel_ = nullptr;
     lv_obj_t* dj_title_ = nullptr;
     lv_obj_t* dj_info_ = nullptr;
-    lv_obj_t* dj_wave_box_ = nullptr;
     lv_obj_t* dj_wave_[box2_music::DjEngine::kWave] = {};
-    lv_obj_t* dj_spec_box_ = nullptr;
     lv_obj_t* dj_spec_[box2_music::DjEngine::kBands] = {};
     lv_obj_t* dj_progress_ = nullptr;
-    lv_obj_t* dj_pad_row_ = nullptr;
-    lv_obj_t* dj_pad_[2] = {};
+    lv_obj_t* dj_pad_[box2_music::DjEngine::kPadCount] = {};
+    lv_obj_t* dj_pad_label_[box2_music::DjEngine::kPadCount] = {};
+    lv_obj_t* dj_fx_[kDjFxItems] = {};
+    lv_obj_t* dj_fx_label_[kDjFxItems] = {};
     lv_obj_t* dj_help_ = nullptr;
+    void CreateDjPanel();
+    void UpdateDjPanel(const MusicSnapshot& state, int volume, const MusicDjView& view);
 };
