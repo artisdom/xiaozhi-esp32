@@ -29,6 +29,10 @@ public:
     std::expected<std::string, std::string> Seek(uint32_t milliseconds);
     void SetMode(box2_music::Repeat repeat, bool shuffle);
     MusicSnapshot Snapshot();
+    // Sorted library paths [offset, offset + count); empty until the scan has finished.
+    std::vector<std::string> TrackNames(size_t offset, size_t count);
+    // Mount the card and index all MP3 files in the background (no-op once loaded).
+    void ScanInBackground();
     bool IsBusy() const { return busy_.load(); }
     bool IsPaused() const { return paused_.load(); }
 

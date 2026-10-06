@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <memory>
 #include <new>
+#include <utility>
 
 #include <esp_random.h>
 #include "application.h"
@@ -26,8 +27,8 @@
 namespace {
 constexpr const char* kTag = "Box2Music";
 constexpr const char* kMountPoint = "/sdcard";
-constexpr const char* kMusicDir = "/sdcard/MUSIC";
 constexpr int kMaxDirectoryEntries = 4096;
+constexpr int kMaxScanDepth = 6;
 
 struct DecodeBuffers {
     std::array<uint8_t, 1441> input;    // Largest supported Layer III frame.
@@ -81,6 +82,9 @@ esp_err_t SdMp3Player::Mount() {
         card_ = nullptr;
         spi_bus_free(SD_SPI_HOST);
         ESP_LOGW(kTag, "SD mount failed: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(kTag, "SD card mounted: %s, %llu MB", card_->cid.name,
+                 (unsigned long long)card_->csd.capacity * card_->csd.sector_size / (1024 * 1024));
     }
     return ret;
 }
@@ -97,36 +101,63 @@ std::expected<void, std::string> SdMp3Player::LoadLibrary(bool refresh) {
     if (ret != ESP_OK)
         return std::unexpected(std::string("SD card unavailable: ") + esp_err_to_name(ret));
     std::lock_guard<std::mutex> storage_lock(storage_mutex_);
-    std::unique_ptr<DIR, decltype(&closedir)> dir(opendir(kMusicDir), closedir);
-    if (!dir)
-        return std::unexpected("Cannot open MUSIC directory on SD card");
     std::vector<std::string> tracks;
     tracks.reserve(box2_music::Playlist::kCapacity);
     int scanned = 0;
-    bool truncated = false;
-    while (auto* entry = readdir(dir.get())) {
-        if (++scanned > kMaxDirectoryEntries) {
-            truncated = true;
-            break;
-        }
-        if (!box2_music::IsMp3Filename(entry->d_name))
+    bool truncated = false, root_opened = false;
+    // Breadth-first walk of the whole card; paths are stored relative to the mount point.
+    std::vector<std::pair<std::string, int>> pending{{"", 0}};
+    for (size_t next = 0; next < pending.size() && !truncated; ++next) {
+        auto relative = pending[next].first;
+        int depth = pending[next].second;
+        auto directory = std::string(kMountPoint) + (relative.empty() ? "" : "/" + relative);
+        std::unique_ptr<DIR, decltype(&closedir)> dir(opendir(directory.c_str()), closedir);
+        if (!dir) {
+            if (relative.empty())
+                break;
             continue;
-        struct stat st = {};
-        auto path = std::string(kMusicDir) + "/" + entry->d_name;
-        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
-            continue;
-        if (tracks.size() == box2_music::Playlist::kCapacity) {
-            truncated = true;
-            break;
         }
-        tracks.emplace_back(entry->d_name);
+        if (relative.empty())
+            root_opened = true;
+        while (auto* entry = readdir(dir.get())) {
+            if (++scanned > kMaxDirectoryEntries) {
+                truncated = true;
+                break;
+            }
+            std::string name = entry->d_name;
+            if (name.empty() || name[0] == '.' || name == "System Volume Information")
+                continue;
+            auto child = relative.empty() ? name : relative + "/" + name;
+            struct stat st = {};
+            if (child.size() > 255 || stat((std::string(kMountPoint) + "/" + child).c_str(), &st) != 0)
+                continue;
+            if (S_ISDIR(st.st_mode)) {
+                if (depth < kMaxScanDepth)
+                    pending.emplace_back(std::move(child), depth + 1);
+                continue;
+            }
+            if (!S_ISREG(st.st_mode) || !box2_music::IsMp3Filename(name) ||
+                !box2_music::IsMp3RelativePath(child))
+                continue;
+            if (tracks.size() == box2_music::Playlist::kCapacity) {
+                truncated = true;
+                break;
+            }
+            tracks.push_back(std::move(child));
+        }
     }
+    if (!root_opened)
+        return std::unexpected("Cannot read SD card");
     std::lock_guard<std::mutex> lock(mutex_);
     if (refresh && busy_.load())
         return std::unexpected("Playback started during refresh; stop and retry");
     if (library_loaded_ && !refresh)
         return {};
     playlist_.SetTracks(std::move(tracks));
+    ESP_LOGI(kTag, "Found %u MP3 file(s) on SD card%s", (unsigned)playlist_.Tracks().size(),
+             truncated ? " (list truncated)" : "");
+    for (size_t i = 0; i < playlist_.Tracks().size(); ++i)
+        ESP_LOGI(kTag, "  [%03u] %s", (unsigned)(i + 1), playlist_.Tracks()[i].c_str());
     if (refresh)
         info_ = {};  // Files may have been replaced even when their names are unchanged.
     if (refresh && !filename_.empty() && !playlist_.Select(filename_)) {
@@ -206,6 +237,20 @@ MusicSnapshot SdMp3Player::Snapshot() {
     return s;
 }
 
+std::vector<std::string> SdMp3Player::TrackNames(size_t offset, size_t count) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto& tracks = playlist_.Tracks();
+    if (offset >= tracks.size())
+        return {};
+    return {tracks.begin() + offset, tracks.begin() + std::min(tracks.size(), offset + count)};
+}
+
+void SdMp3Player::ScanInBackground() {
+    auto result = QueueLibraryScan(false);
+    if (!result)
+        ESP_LOGW(kTag, "Library scan not started: %s", result.error().c_str());
+}
+
 std::expected<void, std::string> SdMp3Player::LaunchLocked() {
     if (busy_.load())
         return {};
@@ -224,11 +269,11 @@ std::expected<void, std::string> SdMp3Player::LaunchLocked() {
     return {};
 }
 std::expected<std::string, std::string> SdMp3Player::Start(std::string filename) {
-    if (!filename.empty() && !box2_music::IsMp3Filename(filename))
-        return std::unexpected("Expected an MP3 basename in MUSIC (no paths)");
+    if (!filename.empty() && !box2_music::IsMp3RelativePath(filename))
+        return std::unexpected("Expected an MP3 path from music.list, relative to the SD root");
     std::lock_guard<std::mutex> lock(mutex_);
     if (!filename.empty() && library_loaded_ && !playlist_.Select(filename))
-        return std::unexpected("Track not in library; refresh MUSIC first");
+        return std::unexpected("Track not in library; refresh the library first");
     if (!filename.empty()) {
         if (filename_ != filename)
             info_ = {};
@@ -339,7 +384,7 @@ void SdMp3Player::InitializeTools() {
     auto& mcp = McpServer::GetInstance();
     mcp.AddTool(
         "self.music.list",
-        "List sorted MP3 filenames in SD card MUSIC. Supports filename search "
+        "List sorted MP3 paths (relative to the SD card root, searched recursively). Supports filename search "
         "and pagination. First scan or refresh is asynchronous: if scanning=true, call again with "
         "refresh=false until ready. Refresh only while stopped; library capped at 512 tracks.",
         PropertyList({Property("offset", kPropertyTypeInteger, 0, 0, 512),
@@ -394,7 +439,7 @@ void SdMp3Player::InitializeTools() {
         });
     mcp.AddTool(
         "self.music.play",
-        "Play or replace the selected MP3 using its exact MUSIC basename. Empty "
+        "Play or replace the selected MP3 using its exact path from self.music.list. Empty "
         "filename starts selected/first track. Continues through the playlist. Waits for quiet "
         "conversation audio.",
         PropertyList({Property("filename", kPropertyTypeString, std::string()).SetMaxLength(255)}),
@@ -513,7 +558,7 @@ void SdMp3Player::Worker() {
             if (filename_.empty())
                 filename_ = playlist_.Current();
             if (!playlist_.Select(filename_)) {
-                result = std::unexpected("Track not in MUSIC library");
+                result = std::unexpected("Track not in SD library");
                 break;
             }
             filename = filename_;
@@ -556,7 +601,7 @@ void SdMp3Player::Worker() {
         });
         first = false;
         if (indexed_file != filename) {
-            auto path = std::string(kMusicDir) + "/" + filename;
+            auto path = std::string(kMountPoint) + "/" + filename;
             std::unique_ptr<FILE, decltype(&fclose)> file(fopen(path.c_str(), "rb"), fclose);
             if (!file)
                 result = std::unexpected("Cannot open MP3 file");
@@ -638,7 +683,7 @@ void SdMp3Player::Worker() {
 std::expected<void, std::string> SdMp3Player::PlayFile(const std::string& filename, uint32_t token,
                                                        uint32_t revision, uint32_t target,
                                                        const box2_music::TrackInfo& info) {
-    auto path = std::string(kMusicDir) + "/" + filename;
+    auto path = std::string(kMountPoint) + "/" + filename;
     std::unique_ptr<FILE, decltype(&fclose)> file(fopen(path.c_str(), "rb"), fclose);
     if (!file) {
         return std::unexpected("Cannot open MP3 file");

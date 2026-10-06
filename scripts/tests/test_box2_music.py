@@ -27,6 +27,16 @@ class Box2MusicTest(unittest.TestCase):
                 }
                 assert(!IsMp3Filename(std::string("a\0b.mp3", 7)));
                 assert(!IsMp3Filename(std::string(252, 'a') + ".mp3"));
+                assert(IsMp3RelativePath("song.mp3"));
+                assert(IsMp3RelativePath("Rock/Live/Song one.MP3"));
+                for (auto path : {"", "/song.mp3", "a//b.mp3", "../a.mp3", "a/../b.mp3",
+                                  "a/.hidden/b.mp3", "a\\b.mp3", "a/b.wav", "dir/",
+                                  "a/b/.mp3"}) {
+                    assert(!IsMp3RelativePath(path));
+                }
+                assert(!IsMp3RelativePath(std::string(252, 'a') + ".mp3"));
+                assert(TrackLabel("Rock/Live/Song one.MP3") == "Song one");
+                assert(TrackLabel("a.mp3") == "a");
                 assert(StereoToMono(32767, 32767) == 32767);
                 assert(StereoToMono(-32768, -32768) == -32768);
                 assert(StereoToMono(32767, -32768) == 0);

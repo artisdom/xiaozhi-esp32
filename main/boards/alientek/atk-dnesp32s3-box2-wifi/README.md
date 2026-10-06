@@ -9,43 +9,51 @@ python3 scripts/build.py alientek/atk-dnesp32s3-box2-wifi --name atk-dnesp32s3-b
 
 ## SD-card MP3 playback
 
-Insert a FAT32 card and put `.mp3` files in a `MUSIC` directory at its root.
-For example: `MUSIC/Artist - Song.mp3`. Files may have UTF-8 names, with a maximum
-of 255 bytes. Subdirectories and other audio formats are not supported.
+Insert a FAT32 card and copy `.mp3` files anywhere on it; folders are searched
+recursively (up to 6 levels deep, 512 tracks, 4096 directory entries). Hidden
+entries and `System Volume Information` are skipped. Files may have UTF-8 names.
+Tracks are addressed by their path relative to the card root, for example
+`Rock/Artist - Song.mp3`. Other audio formats are not supported.
 Use a card reader to copy files; this firmware does not export USB storage.
 Do not remove the card during playback. After removing or replacing a mounted
 card, restart the board.
+
+At startup the card is mounted and scanned in the background, and the serial
+log lists every file (`Box2Music: Found N MP3 file(s)` followed by
+`[001] path` lines). A mount failure logs `Box2Music: SD mount failed: ...`.
 
 The onboard slot uses SPI2: CS GPIO15, MOSI GPIO16, SCLK GPIO17 and MISO GPIO18.
 These assignments come from Espressif's
 [BOX2 peripherals](https://github.com/espressif/esp-board-manager/blob/a49bf6e8aeadd8f60faad0a8e86383159c4816f2/esp_friends_boards/esp32_s3_box_2/board_peripherals.yaml)
 and [SD device definition](https://github.com/espressif/esp-board-manager/blob/a49bf6e8aeadd8f60faad0a8e86383159c4816f2/esp_friends_boards/esp32_s3_box_2/board_devices.yaml).
-Mounting is lazy; a missing or unreadable card leaves voice-assistant operation
+A missing or unreadable card leaves voice-assistant operation
 available and is reported through `self.music.status`. Cards are never formatted
 automatically.
 
-### Music screen and buttons
+### Music player screen and buttons
 
-The 240×320 music screen shows scrolling title, artist and album/filename, a
-progress bar, elapsed/total time, playback state, track number, volume, repeat
-and shuffle. It appears for music and yields to the conversation screen while
-the assistant is active. It returns when the assistant becomes idle.
+Double-click **M** to open the player. The 240×320 screen shows the scrolling
+title and artist/album, a progress bar, elapsed/total time, playback state,
+track number and volume, then a track browser with a highlighted cursor (`>`
+marks the loaded track). The first browser row is the play mode (repeat
+off/all/one and shuffle). The screen yields to the conversation screen while the
+assistant is active and returns when it becomes idle.
 
-| Button | Action |
-| --- | --- |
-| Double-click **M** from chat | Open music and start/resume the selected track; initially selects the first track |
-| Single-click **M** in music | Pause/resume; starts the selected track if stopped |
-| Double-click **M** in music | Stop and return to chat |
-| Single-click **M** from chat | Existing chat toggle |
-| Single-click **L/R** | Volume down/up |
-| Double-click **L/R** | Previous/next track |
-| Long-press **L/R** | Existing mute/maximum volume actions |
-| Long-press **M** | Existing power-off action |
+| Button | In the player | Elsewhere |
+| --- | --- | --- |
+| Double-click **M** | Stop and return to chat | Open the player |
+| Single-click **M** | Play the highlighted track, pause/resume if it is already loaded, or cycle the mode on the mode row | Existing chat toggle |
+| Single-click **L/R** | Move the cursor up/down (wraps) | Volume down/up |
+| Double-click **L/R** | Previous/next track | Previous/next track |
+| Long-press/hold **L/R** | Volume down/up (repeats while held) | Mute / maximum volume |
+| Long-press **M** | Power off on battery, reboot on USB-C | Same |
 
-Previous restarts the current track after three seconds of playback; before
-that it selects the previous track. Manual navigation wraps at the ends.
-Button single-click actions run after the double-click detection interval.
-Wake-word detection remains available during music.
+The mode row cycles: repeat off, repeat all, repeat one, shuffle (repeat all),
+then back to off. Previous restarts the current track after three seconds of
+playback; before that it selects the previous track. Manual navigation wraps at
+the ends. Button single-click actions run after the double-click detection
+interval. Wake-word detection remains available during music. Seeking is
+available through voice/MCP.
 
 ### Voice and MCP controls
 
@@ -55,8 +63,8 @@ commands require an assistant that supports device MCP calls.
 
 | Tool | Arguments | Result/behavior |
 | --- | --- | --- |
-| `self.music.list` | `offset` (default 0), `limit` (default 20, maximum 64), `query` (optional filename substring), `refresh` (default false) | `files`, `total`, `next_offset`, `truncated`, `scanning` |
-| `self.music.play` | `filename` (exact basename; empty starts selected/first track) | Start or replace playback, then continue through the playlist |
+| `self.music.list` | `offset` (default 0), `limit` (default 20, maximum 64), `query` (optional path substring), `refresh` (default false) | `files`, `total`, `next_offset`, `truncated`, `scanning` |
+| `self.music.play` | `filename` (exact path from `self.music.list`; empty starts selected/first track) | Start or replace playback, then continue through the playlist |
 | `self.music.pause` | None | Retain track and position |
 | `self.music.resume` | None | Resume retained position |
 | `self.music.stop` | None | Cancel playback and reset position |

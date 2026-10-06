@@ -4,7 +4,8 @@
 
 #include "lvgl_theme.h"
 
-void MusicDisplay::UpdateMusic(const MusicSnapshot& state, bool visible, int volume) {
+void MusicDisplay::UpdateMusic(const MusicSnapshot& state, bool visible, int volume,
+                               const std::vector<MusicListRow>& rows) {
     if (!IsSetupUICalled())
         return;
     DisplayLockGuard lock(this);
@@ -30,15 +31,18 @@ void MusicDisplay::UpdateMusic(const MusicSnapshot& state, bool visible, int vol
         };
         title_ = label();
         artist_ = label();
-        album_ = label();
         progress_ = lv_bar_create(music_panel_);
         lv_obj_set_size(progress_, width_ - 20, 10);
         lv_bar_set_range(progress_, 0, 1000);
         time_ = label();
         phase_ = label();
-        mode_ = label();
+        for (auto& row : rows_) {
+            row = label();
+            lv_label_set_long_mode(row, LV_LABEL_LONG_DOT);
+            lv_obj_set_style_pad_hor(row, 4, 0);
+            lv_obj_set_style_radius(row, 4, 0);
+        }
         help_ = label();
-        lv_label_set_long_mode(help_, LV_LABEL_LONG_WRAP);
     }
     if (!visible) {
         lv_obj_add_flag(music_panel_, LV_OBJ_FLAG_HIDDEN);
@@ -57,8 +61,10 @@ void MusicDisplay::UpdateMusic(const MusicSnapshot& state, bool visible, int vol
             lv_label_set_text(label, value.c_str());
     };
     text(title_, state.title.empty() ? "SD Music" : state.title);
-    text(artist_, state.artist.empty() ? "Unknown artist" : state.artist);
-    text(album_, state.album.empty() ? state.filename : state.album);
+    std::string byline = state.artist.empty() ? "Unknown artist" : state.artist;
+    if (!state.album.empty())
+        byline += " - " + state.album;
+    text(artist_, byline);
     char line[128];
     snprintf(
         line, sizeof(line), "%lu:%02lu / %lu:%02lu", (unsigned long)(state.position_ms / 60000),
@@ -71,6 +77,21 @@ void MusicDisplay::UpdateMusic(const MusicSnapshot& state, bool visible, int vol
     snprintf(line, sizeof(line), "%s  %u/%u  Vol %d", state.phase.c_str(),
              unsigned(state.total ? state.index + 1 : 0), unsigned(state.total), volume);
     text(phase_, state.error.empty() ? std::string(line) : state.error);
-    text(mode_, "Repeat: " + state.repeat + (state.shuffle ? "  Shuffle" : "  In order"));
-    text(help_, "M: play/pause\n2x L/R: prev/next\n2x M: stop/chat");
+
+    auto* theme = static_cast<LvglTheme*>(GetTheme());
+    for (int i = 0; i < kListRows; ++i) {
+        if (i >= int(rows.size())) {
+            text(rows_[i], i == 0 && state.library_scanning ? "Scanning SD card..." : "");
+            lv_obj_set_style_bg_opa(rows_[i], LV_OPA_TRANSP, 0);
+            continue;
+        }
+        text(rows_[i], (rows[i].playing ? "> " : "  ") + rows[i].text);
+        lv_obj_set_style_bg_opa(rows_[i], rows[i].selected ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        if (theme) {
+            lv_obj_set_style_bg_color(rows_[i], theme->text_color(), 0);
+            lv_obj_set_style_text_color(
+                rows_[i], rows[i].selected ? theme->background_color() : theme->text_color(), 0);
+        }
+    }
+    text(help_, "L/R:select  M:play  2xL/R:skip  2xM:exit");
 }
