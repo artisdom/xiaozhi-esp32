@@ -93,9 +93,16 @@ Files use the common LRC format (UTF-8, at most 48 KB / 400 lines):
 A line starts at its time stamp and lasts until the next one; an empty line
 (`[01:30.00]`) marks an instrumental break. Without per-word `<mm:ss.xx>` stamps the
 words are timed by spreading the line over them. `[offset:ms]` shifts all times.
-`scripts/fetch_lrc.py` can create lyrics files for a folder of songs from
-lrclib.net; the `[by:...]` tag tells how reliable the timing is (`synced`,
-`scaled`, `estimated`, `asr`).
+Two helper scripts create lyrics files for a folder of songs; the `[by:...]` tag
+tells how reliable a file is:
+
+- `scripts/fetch_lrc.py` looks songs up on lrclib.net (`synced`, `scaled` to the
+  recording's length, or `estimated` by spreading plain lyrics over the song).
+- `scripts/asr_lrc.py` listens to the recordings with faster-whisper and gives every
+  word its real time. It can import your own text files (`[Song title]` sections) as
+  the reference text: the words are matched against what is sung, so the text is yours
+  and the times come from the audio (`asr-aligned`). Without a reference the recognised
+  words are used (`asr`) and must be proof-read, especially Chinese.
 
 ### DJ screen
 
