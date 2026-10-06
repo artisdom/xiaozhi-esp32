@@ -19,6 +19,7 @@
 #include <driver/rtc_io.h>
 #include <esp_sleep.h>
 #include "esp_io_expander_tca95xx_16bit.h"
+#include <esp_system.h>
 
 #define TAG "atk_dnesp32s3_box2_wifi"
 
@@ -362,6 +363,9 @@ private:
                     vTaskDelay(pdMS_TO_TICKS(100));
                     esp_io_expander_set_level(self->io_exp_handle, XIO_SYS_POW, 0);
                     vTaskDelay(pdMS_TO_TICKS(100));
+                } else {
+                    // USB-C powered: the power latch cannot cut power, so reboot instead
+                    esp_restart();
                 }
             },
             this);
