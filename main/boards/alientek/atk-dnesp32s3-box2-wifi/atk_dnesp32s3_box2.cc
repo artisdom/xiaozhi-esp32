@@ -48,7 +48,6 @@ private:
     SdMp3Player music_player_;
     bool music_view_ = false;
     MusicScreen music_screen_ = MusicScreen::Files;  // Which player screen is shown.
-    int64_t music_last_input_us_ = 0;                // Last button press, for the DJ auto-enter.
     // DJ screen.
     int dj_cursor_ = 0;  // Selected DJ item: pads first, then effects.
     std::atomic<int64_t> dj_pad_time_us_[box2_music::DjEngine::kPadCount] = {};
@@ -58,7 +57,6 @@ private:
     uint32_t dj_last_frames_ = 0, dj_last_beats_ = 0;
     int dj_idle_ticks_ = 0, dj_beat_ticks_ = 0;
     std::array<float, box2_music::DjEngine::kBands> dj_bands_ = {};
-    static constexpr int64_t kDjIdleUs = 3000000;  // Now playing -> DJ screen after 3 s.
     std::string music_dir_;       // Folder shown in the browser, relative to the card root.
     std::vector<box2_music::BrowseEntry> browse_;
     size_t browse_cursor_ = 0;
@@ -85,12 +83,11 @@ private:
                     // redraw can take longer than the tick, and a backlog in the main loop
                     // delays button handling by many seconds.
                     if ((self->ticks_ % 10 == 0 ||
-                         (self->music_view_ && self->music_screen_ == MusicScreen::Dj &&
+                         (self->music_view_ && self->music_screen_ != MusicScreen::Files &&
                           self->ticks_ % 2 == 0)) &&
                         !self->music_refresh_pending_.exchange(true)) {
                         Application::GetInstance().Schedule([self]() {
                             auto state = self->music_player_.Snapshot();
-                            self->AutoEnterDj(state);
                             bool idle =
                                 Application::GetInstance().GetDeviceState() == kDeviceStateIdle;
                             if (state.busy && state.phase != "paused")
@@ -295,22 +292,12 @@ private:
         return v;
     }
 
-    // Now playing for 3 s without a button press switches to the DJ screen.
-    void AutoEnterDj(const MusicSnapshot& state) {
-        if (music_view_ && music_screen_ == MusicScreen::NowPlaying && state.phase == "playing" &&
-            esp_timer_get_time() - music_last_input_us_ >= kDjIdleUs)
-            music_screen_ = MusicScreen::Dj;
-    }
-
-    // Any press while the player is open: restart the idle timer.
-    void MusicInput() { music_last_input_us_ = esp_timer_get_time(); }
-
     MusicBrowseView BuildBrowseView(const MusicSnapshot& state) {
         MusicBrowseView view;
         // Music started by voice shows now playing without opening the player.
         view.screen = music_view_ ? music_screen_ : MusicScreen::NowPlaying;
         view.path = music_dir_;
-        if (view.screen == MusicScreen::Dj)
+        if (view.screen != MusicScreen::Files)  // Now playing shows the mini visualiser too.
             view.dj = BuildDjView();
         if (view.screen != MusicScreen::Files)
             return view;
@@ -348,7 +335,6 @@ private:
         auto state = music_player_.Snapshot();
         music_screen_ = (state.busy || state.phase == "paused") ? MusicScreen::NowPlaying
                                                                  : MusicScreen::Files;
-        MusicInput();
         music_dir_ = box2_music::ParentDirectory(state.filename);
         RebuildBrowse(state.filename);
         RefreshMusicView(true);
@@ -362,7 +348,6 @@ private:
 
     // M double-click: one screen forward (files -> now playing -> DJ).
     void ScreenForward() {
-        MusicInput();
         if (music_screen_ == MusicScreen::Files)
             music_screen_ = MusicScreen::NowPlaying;
         else if (music_screen_ == MusicScreen::NowPlaying)
@@ -372,7 +357,6 @@ private:
 
     // Q: DJ -> now playing -> files -> up through the folders -> exit.
     void ScreenBack() {
-        MusicInput();
         if (music_screen_ == MusicScreen::Dj) {
             music_screen_ = MusicScreen::NowPlaying;
         } else if (music_screen_ == MusicScreen::NowPlaying) {
@@ -404,14 +388,12 @@ private:
 
     // Move through the DJ items in reading order (pads, then effects).
     void DjMove(int delta) {
-        MusicInput();
         dj_cursor_ = (dj_cursor_ + MusicDisplay::kDjItems + delta) % MusicDisplay::kDjItems;
         RefreshMusicView(true);
     }
 
     // Pads and effects are laid out in one grid of four columns: move a row up or down.
     void DjMoveRow(int direction) {
-        MusicInput();
         DjMove(direction * MusicDisplay::kDjPadColumns);
     }
 
@@ -435,7 +417,6 @@ private:
     }
 
     void ShowNowPlayingScreen() {
-        MusicInput();
         music_screen_ = MusicScreen::NowPlaying;
         RefreshMusicView(true);
     }
@@ -554,25 +535,11 @@ private:
                                       .disable_pull = false};
         ESP_ERROR_CHECK(iot_button_new_gpio_device(&r_btn_cfg, &r_cfg, &r_btn_handle));
 
-        // Every press restarts the DJ idle timer; the DJ pad fires on press, not on click,
-        // so it is not delayed by double-click detection.
-        iot_button_register_cb(
-            l_btn_handle, BUTTON_PRESS_DOWN, nullptr,
-            [](void*, void* data) { static_cast<atk_dnesp32s3_box2_wifi*>(data)->MusicInput(); },
-            this);
-        iot_button_register_cb(
-            r_btn_handle, BUTTON_PRESS_DOWN, nullptr,
-            [](void*, void* data) { static_cast<atk_dnesp32s3_box2_wifi*>(data)->MusicInput(); },
-            this);
-        iot_button_register_cb(
-            q_btn_handle, BUTTON_PRESS_DOWN, nullptr,
-            [](void*, void* data) { static_cast<atk_dnesp32s3_box2_wifi*>(data)->MusicInput(); },
-            this);
+        // The DJ pad fires on press, not on click, so it is not delayed by double-click detection.
         iot_button_register_cb(
             m_btn_handle, BUTTON_PRESS_DOWN, nullptr,
             [](void*, void* data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(data);
-                self->MusicInput();
                 if (self->music_view_ && self->music_screen_ == MusicScreen::Dj)
                     self->DjActivate();
             },
@@ -654,7 +621,6 @@ private:
                     self->power_save_timer_->WakeUp();
                     auto state = self->music_player_.Snapshot();
                     if (self->music_view_) {
-                        self->MusicInput();
                         if (self->music_screen_ == MusicScreen::Files)
                             self->ActivateBrowseEntry();
                         else if (self->music_screen_ == MusicScreen::NowPlaying)

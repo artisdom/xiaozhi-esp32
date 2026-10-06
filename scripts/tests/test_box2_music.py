@@ -205,6 +205,65 @@ class Box2MusicTest(unittest.TestCase):
             }
         ''')
 
+    def test_lyrics_parsing_tokenizing_and_timing(self):
+        self.compile_and_run(r'''
+            #include <cassert>
+            #include "lyrics.h"
+            using namespace box2_music;
+            int main() {
+                // English: words split at spaces, timed across the line, lines in time order.
+                auto lyrics = ParseLrc("\xEF\xBB\xBF[ti:Test]\r\n[00:10.50]Head, shoulders, knees\r\n"
+                                       "[00:05.00]Hello world\n[00:20.00]\n[00:30.25]Last line\n");
+                assert(lyrics && lyrics->lines.size() == 3);
+                auto& l = lyrics->lines;
+                assert(l[0].start_ms == 5000 && l[0].words.size() == 2 && l[0].words[0].text == "Hello");
+                assert(l[0].end_ms == 10500 && l[1].start_ms == 10500);
+                assert(l[1].words.size() == 3 && l[1].words[0].text == "Head,");
+                assert(l[1].end_ms == 20000);                 // Ended by the instrumental marker.
+                assert(l[2].start_ms == 30250 && l[2].end_ms == 35250);
+                for (auto& line : l) {
+                    uint32_t last = line.start_ms;
+                    for (auto& w : line.words) {              // Contiguous, ordered, inside the line.
+                        assert(w.start_ms >= last && w.end_ms >= w.start_ms && w.end_ms <= line.end_ms);
+                        last = w.end_ms;
+                    }
+                }
+                assert(l[1].words[0].space_after && !l[1].words[2].space_after);
+                // A long gap after a short line is instrumental: words are not stretched over it.
+                assert(l[1].words.back().end_ms < 20000);
+                // Lookup helpers.
+                assert(lyrics->LineAt(0) == -1 && lyrics->LineAt(5000) == 0 && lyrics->LineAt(10499) == 0);
+                assert(lyrics->LineAt(10500) == 1 && lyrics->LineAt(99999) == 2);
+                assert(l[0].WordAt(4999) == -1 && l[0].WordAt(5000) == 0 && l[0].WordAt(99999) == 1);
+                // Chinese: one word per character, punctuation attached to the previous one.
+                auto zh = ParseLrc("[00:01.00]两只老虎，两只老虎\n[00:09.00]跑得快 跑得快\n");
+                assert(zh && zh->lines[0].words.size() == 8);
+                assert(zh->lines[0].words[3].text == "虎，" && zh->lines[0].words[0].text == "两");
+                assert(zh->lines[1].words.size() == 6 && zh->lines[1].words[2].space_after);
+                // Mixed text and many stamps on one line.
+                auto mix = ParseLrc("[00:01.00][00:03.00]ABC 字母\n");
+                assert(mix && mix->lines.size() == 2 && mix->lines[0].words.size() == 3);
+                assert(mix->lines[0].words[0].text == "ABC" && mix->lines[0].words[1].text == "字");
+                // Enhanced word timing and offset.
+                auto enh = ParseLrc("[offset:500]\n[00:10.00]<00:10.00>Twin<00:10.40>kle <00:11.00>star\n[00:14.00]x\n");
+                assert(enh && enh->lines[0].start_ms == 9500);
+                assert(enh->lines[0].words.size() == 3 && enh->lines[0].words[1].start_ms == 10000 - 0 + 0 - 500 + 400 + 0);
+                assert(enh->lines[0].words[2].start_ms == 10500);
+                // Garbage and limits.
+                assert(!ParseLrc("no timestamps here\n[ar:Someone]\n"));
+                assert(!ParseLrc(""));
+                std::string many;
+                for (int i = 0; i < 1000; ++i) many += "[00:" + std::to_string(i % 60 / 10) + std::to_string(i % 10) + ".00]x\n";
+                assert(ParseLrc(many) && ParseLrc(many)->lines.size() <= 400);
+                std::string longline = "[00:01.00]";
+                for (int i = 0; i < 300; ++i) longline += "w ";
+                auto big = ParseLrc(longline);
+                assert(big && big->lines[0].words.size() <= 64);
+                assert(!ParseLrc("[99:99.99]bad\n[00:61.00]bad\n"));
+                assert(ParseLrc(std::string("[00:01.00]\xE4\xB8", 12)));  // Truncated UTF-8 is tolerated.
+            }
+        ''')
+
     def test_playlist_navigation_repeat_shuffle_and_refresh(self):
         self.compile_and_run(r'''
             #include <cassert>

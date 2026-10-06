@@ -29,6 +29,7 @@ constexpr const char* kTag = "Box2Music";
 constexpr const char* kMountPoint = "/sdcard";
 constexpr int kMaxDirectoryEntries = 4096;
 constexpr int kMaxScanDepth = 6;
+constexpr size_t kMaxLyricsBytes = 48 * 1024;
 
 struct DecodeBuffers {
     std::array<uint8_t, 1441> input;    // Largest supported Layer III frame.
@@ -228,8 +229,10 @@ std::expected<void, std::string> SdMp3Player::LoadLibrary(bool refresh) {
              truncated ? " (list truncated)" : "");
     for (size_t i = 0; i < playlist_.Tracks().size(); ++i)
         ESP_LOGI(kTag, "  [%03u] %s", (unsigned)(i + 1), playlist_.Tracks()[i].c_str());
-    if (refresh)
+    if (refresh) {
         info_ = {};  // Files may have been replaced even when their names are unchanged.
+        lyrics_file_.clear();
+    }
     if (refresh && !filename_.empty() && !playlist_.Select(filename_)) {
         filename_ = playlist_.Current();
         info_ = {};
@@ -294,6 +297,8 @@ MusicSnapshot SdMp3Player::Snapshot() {
     s.artist = info_.artist;
     s.album = info_.album;
     s.error = error_;
+    if (lyrics_file_ == filename_)
+        s.lyrics = lyrics_;
     s.position_ms = position_ms_;
     s.duration_ms = info_.duration_ms;
     s.sample_rate = info_.sample_rate;
@@ -305,6 +310,36 @@ MusicSnapshot SdMp3Player::Snapshot() {
     s.shuffle = playlist_.Shuffle();
     s.busy = busy_.load();
     return s;
+}
+
+// Load "<song>.lrc" (same folder and name as the MP3). A missing or unparsable file means
+// "no lyrics"; the attempt is remembered so it is not repeated on every resume.
+void SdMp3Player::EnsureLyrics(const std::string& filename) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (lyrics_file_ == filename)
+            return;
+    }
+    std::shared_ptr<const box2_music::Lyrics> loaded;
+    auto stem = std::string(kMountPoint) + "/" + filename.substr(0, filename.size() - 4);
+    for (const char* extension : {".lrc", ".LRC"}) {
+        std::unique_ptr<FILE, decltype(&fclose)> file(fopen((stem + extension).c_str(), "rb"),
+                                                      fclose);
+        if (!file)
+            continue;
+        std::string text(kMaxLyricsBytes + 1, '\0');
+        text.resize(fread(text.data(), 1, text.size(), file.get()));
+        if (text.size() > kMaxLyricsBytes)
+            text.resize(kMaxLyricsBytes);
+        if (auto parsed = box2_music::ParseLrc(text))
+            loaded = std::make_shared<const box2_music::Lyrics>(std::move(*parsed));
+        ESP_LOGI(kTag, "Lyrics for %s: %s", filename.c_str(),
+                 loaded ? (std::to_string(loaded->lines.size()) + " lines").c_str() : "unreadable");
+        break;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    lyrics_ = std::move(loaded);
+    lyrics_file_ = filename;
 }
 
 std::vector<std::string> SdMp3Player::TrackNames(size_t offset, size_t count) {
@@ -634,6 +669,7 @@ void SdMp3Player::Worker() {
             filename = filename_;
             target = target_ms_;
         }
+        EnsureLyrics(filename);
         if (paused_.load())
             break;  // Retain position, but release decoder/task memory while paused.
         // Initial requests and requests issued through conversation wait for two seconds of quiet.

@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <expected>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@
 #include <sdmmc_cmd.h>
 
 #include "dj_engine.h"
+#include "lyrics.h"
 #include "mp3_index.h"
 #include "music_playlist.h"
 
@@ -18,6 +20,8 @@ struct MusicSnapshot {
     uint32_t position_ms = 0, duration_ms = 0, sample_rate = 0, bitrate = 0;
     size_t index = 0, total = 0;
     bool shuffle = false, busy = false, truncated = false, library_scanning = false;
+    // Lyrics of `filename` from "<song>.lrc" next to the MP3; null when there are none.
+    std::shared_ptr<const box2_music::Lyrics> lyrics;
 };
 class SdMp3Player {
 public:
@@ -49,9 +53,12 @@ private:
     box2_music::TrackInfo info_;
     bool library_loaded_ = false, truncated_ = false, library_scanning_ = false;
     bool library_refresh_ = false;
+    std::shared_ptr<const box2_music::Lyrics> lyrics_;
+    std::string lyrics_file_;  // Track the lyrics_ belong to (also set when there are none).
     std::string filename_, error_, phase_ = "stopped";
     uint32_t position_ms_ = 0, target_ms_ = 0;
     esp_err_t Mount();
+    void EnsureLyrics(const std::string& filename);
     std::expected<void, std::string> LoadLibrary(bool refresh = false);
     std::expected<bool, std::string> QueueLibraryScan(bool refresh);
     std::expected<void, std::string> LaunchLocked();

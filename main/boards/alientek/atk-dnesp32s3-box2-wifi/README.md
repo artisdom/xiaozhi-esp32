@@ -39,10 +39,11 @@ player from the chat screen. It has three screens:
 - **Files** – a folder browser for the whole card. The header shows the current
   folder (`SD:/Rock/Live`), folders end in `/`, `..` goes up one level, and `>`
   marks the loaded track.
-- **Now playing** – scrolling title and artist/album, progress bar, elapsed/total
-  time, state, track number, volume, repeat/shuffle. After 3 seconds without a
-  button press while music is playing, it switches to the DJ screen by itself.
-- **DJ** – a full-screen visualiser with effects and sampler pads (below).
+- **Now playing** – the song title, scrolling lyrics (below), a mini waveform and
+  spectrum, a progress bar that flashes on each beat, and the elapsed/total time,
+  BPM and volume.
+- **DJ** – a full-screen visualiser with effects and sampler pads (below). It is
+  only shown when you ask for it with a double-click of **M** on Now playing.
 
 | Key | Files | Now playing | DJ | Outside the player |
 | --- | --- | --- | --- | --- |
@@ -68,6 +69,33 @@ available during music.
 The Q key's electrical polarity is not documented, so the firmware treats the
 level it sees at start-up as "released" (`Q key idle level` in the log). Do not
 hold Q while the board boots.
+
+### Lyrics
+
+The Now playing screen shows the lyrics of the song, aimed at children learning
+English and Chinese words. Put a lyrics file named like the song next to it on
+the SD card: `Bingo.mp3` → `Bingo.lrc`. The screen shows the previous line, the
+current line and the next lines, and scrolls as the song goes. In the current line
+the words already sung are green, the word being sung is orange and underlined,
+and the words still to come keep the normal colour. English text is highlighted
+word by word and Chinese text character by character. Songs without a `.lrc` file
+show a short note instead.
+
+Files use the common LRC format (UTF-8, at most 48 KB / 400 lines):
+
+```
+[ti:Title]
+[00:12.50]First line of the song
+[00:16.00]Second line
+[00:20.00]<00:20.00>Word <00:20.40>by <00:20.80>word timing is optional
+```
+
+A line starts at its time stamp and lasts until the next one; an empty line
+(`[01:30.00]`) marks an instrumental break. Without per-word `<mm:ss.xx>` stamps the
+words are timed by spreading the line over them. `[offset:ms]` shifts all times.
+`scripts/fetch_lrc.py` can create lyrics files for a folder of songs from
+lrclib.net; the `[by:...]` tag tells how reliable the timing is (`synced`,
+`scaled`, `estimated`, `asr`).
 
 ### DJ screen
 
