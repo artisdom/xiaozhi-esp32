@@ -297,7 +297,7 @@ private:
         // Music started by voice shows now playing without opening the player.
         view.screen = music_view_ ? music_screen_ : MusicScreen::NowPlaying;
         view.path = music_dir_;
-        if (view.screen != MusicScreen::Files)  // Now playing shows the mini visualiser too.
+        if (view.screen == MusicScreen::Dj)
             view.dj = BuildDjView();
         if (view.screen != MusicScreen::Files)
             return view;

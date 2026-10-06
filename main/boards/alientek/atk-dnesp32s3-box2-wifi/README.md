@@ -39,9 +39,9 @@ player from the chat screen. It has three screens:
 - **Files** – a folder browser for the whole card. The header shows the current
   folder (`SD:/Rock/Live`), folders end in `/`, `..` goes up one level, and `>`
   marks the loaded track.
-- **Now playing** – the song title, scrolling lyrics (below), a mini waveform and
-  spectrum, a progress bar that flashes on each beat, and the elapsed/total time,
-  BPM and volume.
+- **Now playing** – the lyrics, full screen and nothing else, in an extra large 30 px
+  font (below). The current line is centred with the previous and next lines above
+  and below when they fit.
 - **DJ** – a full-screen visualiser with effects and sampler pads (below). It is
   only shown when you ask for it with a double-click of **M** on Now playing.
 
@@ -72,14 +72,20 @@ hold Q while the board boots.
 
 ### Lyrics
 
-The Now playing screen shows the lyrics of the song, aimed at children learning
-English and Chinese words. Put a lyrics file named like the song next to it on
-the SD card: `Bingo.mp3` → `Bingo.lrc`. The screen shows the previous line, the
-current line and the next lines, and scrolls as the song goes. In the current line
-the words already sung are green, the word being sung is orange and underlined,
-and the words still to come keep the normal colour. English text is highlighted
-word by word and Chinese text character by character. Songs without a `.lrc` file
-show a short note instead.
+The Now playing screen is the lyrics and nothing else: it covers the whole display,
+status bar included, and uses a 30 px font so it is easy to read from a distance. It is
+aimed at children learning English and Chinese words. Put a lyrics file named like the
+song next to it on the SD card: `Bingo.mp3` → `Bingo.lrc`. The current line is shown
+centred with the previous and next lines dimmed above and below, as many as fit; long
+lines wrap, and when two lines already fill the screen only the current and next one are
+shown. In the current line the words already sung are green, the word being sung is
+orange and underlined, and the words still to come keep the normal colour. English text is
+highlighted word by word and Chinese text character by character. A song without a `.lrc`
+file shows its title instead.
+
+The 30 px font (`font_noto_sans_common_30_4`, about 2.6 MB) is packed into the assets
+partition as an extra asset for this board; flash `build/generated_assets.bin` as usual.
+If it is missing the screen falls back to the 20 px UI font.
 
 Files use the common LRC format (UTF-8, at most 48 KB / 400 lines):
 

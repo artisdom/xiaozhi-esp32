@@ -6,6 +6,7 @@
 
 #include "dj_engine.h"
 #include "display/lcd_display.h"
+#include "display/lvgl_display/lvgl_font.h"
 #include "sd_mp3_player.h"
 
 // One line of the folder browser.
@@ -56,27 +57,23 @@ private:
     lv_obj_t* rows_[kMaxListRows] = {};
     lv_obj_t* phase_ = nullptr;
     lv_obj_t* help_ = nullptr;
-    // Now playing: title, scrolling lyrics, mini visualiser, progress and a time/BPM line.
-    static constexpr int kLyricRows = 5;
-    static constexpr int kMiniWave = 24;
-    lv_obj_t* title_ = nullptr;
+    // Now playing: a full-screen panel with nothing but the lyrics, in a large font.
+    static constexpr int kLyricRows = 3;  // Previous, current and next line.
+    lv_obj_t* lyrics_panel_ = nullptr;
     lv_obj_t* lyrics_box_ = nullptr;
     lv_obj_t* lyric_rows_[kLyricRows] = {};
     lv_obj_t* no_lyrics_ = nullptr;
-    lv_obj_t* np_visual_ = nullptr;
-    lv_obj_t* np_wave_[kMiniWave] = {};
-    lv_obj_t* np_spec_[box2_music::DjEngine::kBands] = {};
-    lv_obj_t* progress_ = nullptr;
-    lv_obj_t* np_info_ = nullptr;
-    lv_obj_t* np_time_ = nullptr;
-    lv_obj_t* np_meta_ = nullptr;
+    std::shared_ptr<LvglFont> lyric_font_;  // 30 px font from the assets, if present.
+    bool lyric_font_tried_ = false;
     // Which lyric line/word each row currently shows, so spans are only rebuilt on change.
     std::shared_ptr<const box2_music::Lyrics> lyric_source_;
     int lyric_row_line_[kLyricRows] = {};
     int lyric_row_word_[kLyricRows] = {};
-    void CreateNowPlayingWidgets(int inner_width);
-    void UpdateNowPlaying(const MusicSnapshot& state, int volume, const MusicDjView& visual);
-    void UpdateLyrics(const MusicSnapshot& state);
+    int lyric_row_height_[kLyricRows] = {};
+    bool lyric_row_shown_[kLyricRows] = {};
+    const lv_font_t* LyricsFont();
+    void CreateLyricsPanel();
+    void UpdateNowPlaying(const MusicSnapshot& state);
     void ShowLyricRow(int row, const box2_music::LyricLine* line, int line_index, bool current,
                       int word);
 

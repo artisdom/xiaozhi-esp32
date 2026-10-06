@@ -1213,6 +1213,16 @@ if(NOTO_FONTS_COMPONENT_PATH)
     set(NOTO_FONTS_PATH "${NOTO_FONTS_COMPONENT_PATH}")
 endif()
 
+if(CONFIG_BOARD_TYPE_ATK_DNESP32S3_BOX2_WIFI AND NOTO_FONTS_PATH)
+    # The lyrics screen draws with a 30 px font shipped as an extra asset (the UI text font
+    # stays 20 px). Without it the screen falls back to the UI font.
+    set(BOX2_LYRICS_FONT "${NOTO_FONTS_PATH}/cbin/font_noto_sans_common_30_4.bin")
+    if(EXISTS "${BOX2_LYRICS_FONT}")
+        set(DEFAULT_ASSETS_EXTRA_FILES "${CMAKE_BINARY_DIR}/box2_extra_assets")
+        file(COPY "${BOX2_LYRICS_FONT}" DESTINATION "${DEFAULT_ASSETS_EXTRA_FILES}")
+    endif()
+endif()
+
 if(CONFIG_BOARD_TYPE_ESP_VOCAT)
     find_component_by_pattern("esp_emote_assets" EMOTE_ASSETS_COMPONENT EMOTE_ASSETS_PATH)
     if(EMOTE_ASSETS_PATH)
@@ -1334,6 +1344,8 @@ function(build_default_assets_bin)
     # Add default assets extra files if defined
     if(DEFAULT_ASSETS_EXTRA_FILES)
         list(APPEND BUILD_ARGS "--extra_files" "${DEFAULT_ASSETS_EXTRA_FILES}")
+        file(GLOB DEFAULT_ASSETS_EXTRA_FILE_LIST CONFIGURE_DEPENDS "${DEFAULT_ASSETS_EXTRA_FILES}/*")
+        list(APPEND DEFAULT_ASSETS_DEPENDENCIES ${DEFAULT_ASSETS_EXTRA_FILE_LIST})
     endif()
 
     list(APPEND BUILD_ARGS "--esp_sr_model_path" "${ESP_SR_MODEL_PATH}")
