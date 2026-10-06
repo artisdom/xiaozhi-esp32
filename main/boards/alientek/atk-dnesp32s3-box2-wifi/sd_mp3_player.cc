@@ -56,7 +56,7 @@ static void DiagnoseCard(const sdspi_device_config_t& slot_config) {
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SD_SPI_HOST;
     host.max_freq_khz = 1000;
-    if (host.init() != ESP_OK)
+    if (sdspi_host_init() != ESP_OK)
         return;
     sdspi_dev_handle_t handle;
     auto slot = slot_config;
@@ -75,12 +75,35 @@ static void DiagnoseCard(const sdspi_device_config_t& slot_config) {
             if (ret == ESP_OK) {
                 ESP_LOGW(kTag, "SD diagnose: signature 0x%02X%02X (0x55AA is valid)", sector[510],
                          sector[511]);
-                ESP_LOG_BUFFER_HEXDUMP(kTag, sector.data(), 64, ESP_LOG_WARN);
+                // Partition table at 446: first entry's type, start LBA and size.
+                for (int i = 0; i < 4; ++i) {
+                    const uint8_t* e = &sector[446 + 16 * i];
+                    uint32_t lba = e[8] | e[9] << 8 | e[10] << 16 | uint32_t(e[11]) << 24;
+                    uint32_t size = e[12] | e[13] << 8 | e[14] << 16 | uint32_t(e[15]) << 24;
+                    ESP_LOGW(kTag, "SD diagnose: partition %d type 0x%02X start %u size %u", i + 1,
+                             e[4], (unsigned)lba, (unsigned)size);
+                }
+                const uint8_t* e = &sector[446];
+                uint32_t lba = e[8] | e[9] << 8 | e[10] << 16 | uint32_t(e[11]) << 24;
+                if (lba) {
+                    ret = sdmmc_read_sectors(&card, sector.data(), lba, 1);
+                    ESP_LOGW(kTag, "SD diagnose: read partition 1 boot sector %u: %s",
+                             (unsigned)lba, esp_err_to_name(ret));
+                    if (ret == ESP_OK) {
+                        ESP_LOGW(kTag, "SD diagnose: boot sector signature 0x%02X%02X, "
+                                       "bytes/sector %u, sectors/cluster %u",
+                                 sector[510], sector[511], sector[11] | sector[12] << 8,
+                                 sector[13]);
+                        ESP_LOG_BUFFER_HEXDUMP(kTag, sector.data(), 96, ESP_LOG_WARN);
+                    }
+                } else {
+                    ESP_LOG_BUFFER_HEXDUMP(kTag, sector.data(), 64, ESP_LOG_WARN);
+                }
             }
         }
         sdspi_host_remove_device(handle);
     }
-    host.deinit();
+    sdspi_host_deinit();
 }
 
 esp_err_t SdMp3Player::Mount() {
