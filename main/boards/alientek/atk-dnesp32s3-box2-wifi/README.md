@@ -9,7 +9,7 @@ python3 scripts/build.py alientek/atk-dnesp32s3-box2-wifi --name atk-dnesp32s3-b
 
 ## SD-card MP3 playback
 
-Insert a FAT32 card (exFAT, the default for cards over 32 GB, is not supported: ESP-IDF builds FatFs without it and offers no option to enable it) and copy `.mp3` files anywhere on it; folders are searched
+Insert a FAT32 card (exFAT is not supported: ESP-IDF builds FatFs without it) and copy `.mp3` files anywhere on it; folders are searched
 recursively (up to 6 levels deep, 512 tracks, 4096 directory entries). Hidden
 entries and `System Volume Information` are skipped. Files may have UTF-8 names.
 Tracks are addressed by their path relative to the card root, for example

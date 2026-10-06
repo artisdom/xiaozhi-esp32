@@ -51,6 +51,38 @@ struct DecoderResources {
 };
 }  // namespace
 
+// Read sector 0 raw and log it, to tell a bad bus/format from a wrong filesystem.
+static void DiagnoseCard(const sdspi_device_config_t& slot_config) {
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = SD_SPI_HOST;
+    host.max_freq_khz = 1000;
+    if (host.init() != ESP_OK)
+        return;
+    sdspi_dev_handle_t handle;
+    auto slot = slot_config;
+    if (sdspi_host_init_device(&slot, &handle) == ESP_OK) {
+        host.slot = handle;
+        sdmmc_card_t card = {};
+        auto ret = sdmmc_card_init(&host, &card);
+        if (ret != ESP_OK) {
+            ESP_LOGW(kTag, "SD diagnose: card init failed: %s", esp_err_to_name(ret));
+        } else {
+            std::array<uint8_t, 512> sector = {};
+            ret = sdmmc_read_sectors(&card, sector.data(), 0, 1);
+            ESP_LOGW(kTag, "SD diagnose: %s, %u sectors of %d bytes, read sector 0: %s",
+                     card.cid.name, (unsigned)card.csd.capacity, card.csd.sector_size,
+                     esp_err_to_name(ret));
+            if (ret == ESP_OK) {
+                ESP_LOGW(kTag, "SD diagnose: signature 0x%02X%02X (0x55AA is valid)", sector[510],
+                         sector[511]);
+                ESP_LOG_BUFFER_HEXDUMP(kTag, sector.data(), 64, ESP_LOG_WARN);
+            }
+        }
+        sdspi_host_remove_device(handle);
+    }
+    host.deinit();
+}
+
 esp_err_t SdMp3Player::Mount() {
     std::lock_guard<std::mutex> lock(storage_mutex_);
     if (card_) {
@@ -67,9 +99,6 @@ esp_err_t SdMp3Player::Mount() {
     if (ret != ESP_OK) {
         return ret;
     }
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SD_SPI_HOST;
-    host.max_freq_khz = SDMMC_FREQ_DEFAULT;
     sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot.host_id = SD_SPI_HOST;
     slot.gpio_cs = SD_CS_GPIO;
@@ -77,17 +106,28 @@ esp_err_t SdMp3Player::Mount() {
     config.format_if_mount_failed = false;
     config.max_files = 3;
     config.allocation_unit_size = 16 * 1024;
-    ret = esp_vfs_fat_sdspi_mount(kMountPoint, &host, &slot, &config, &card_);
-    if (ret != ESP_OK) {
+    // The board's SD wiring is unverified. SPI mode has no data CRC, so a marginal bus can
+    // return corrupt sectors that look like "no filesystem": retry at slower clocks.
+    for (int freq_khz : {SDMMC_FREQ_DEFAULT, 10000, 4000, 1000}) {
+        sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+        host.slot = SD_SPI_HOST;
+        host.max_freq_khz = freq_khz;
+        ret = esp_vfs_fat_sdspi_mount(kMountPoint, &host, &slot, &config, &card_);
+        if (ret == ESP_OK) {
+            ESP_LOGI(kTag, "SD card mounted: %s, %llu MB, %d kHz", card_->cid.name,
+                     (unsigned long long)card_->csd.capacity * card_->csd.sector_size /
+                         (1024 * 1024),
+                     freq_khz);
+            return ret;
+        }
+        ESP_LOGW(kTag, "SD mount failed at %d kHz: %s", freq_khz, esp_err_to_name(ret));
         card_ = nullptr;
-        spi_bus_free(SD_SPI_HOST);
-        ESP_LOGW(kTag, "SD mount failed: %s%s", esp_err_to_name(ret),
-                 ret == ESP_FAIL ? " (card has no FAT12/16/32 filesystem; exFAT is not supported)"
-                                 : "");
-    } else {
-        ESP_LOGI(kTag, "SD card mounted: %s, %llu MB", card_->cid.name,
-                 (unsigned long long)card_->csd.capacity * card_->csd.sector_size / (1024 * 1024));
+        if (ret != ESP_FAIL)  // Only a filesystem/data problem is worth retrying slower.
+            break;
     }
+    if (ret == ESP_FAIL)
+        DiagnoseCard(slot);
+    spi_bus_free(SD_SPI_HOST);
     return ret;
 }
 
@@ -101,7 +141,7 @@ std::expected<void, std::string> SdMp3Player::LoadLibrary(bool refresh) {
     }
     auto ret = Mount();
     if (ret != ESP_OK)
-        return std::unexpected(ret == ESP_FAIL ? "SD card must be FAT32 (exFAT unsupported)"
+        return std::unexpected(ret == ESP_FAIL ? "SD card has no readable FAT filesystem (see log)"
                                                : std::string("SD card unavailable: ") +
                                                      esp_err_to_name(ret));
     std::lock_guard<std::mutex> storage_lock(storage_mutex_);
