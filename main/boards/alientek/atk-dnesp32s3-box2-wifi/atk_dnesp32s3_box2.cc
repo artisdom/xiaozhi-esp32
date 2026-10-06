@@ -409,19 +409,10 @@ private:
         RefreshMusicView(true);
     }
 
-    // Move between the two pad rows and the effect row, keeping the column.
+    // Pads and effects are laid out in one grid of four columns: move a row up or down.
     void DjMoveRow(int direction) {
         MusicInput();
-        using box2_music::DjEngine;
-        constexpr int kPadRows = DjEngine::kPadCount / MusicDisplay::kDjPadColumns;
-        const bool on_fx = dj_cursor_ >= DjEngine::kPadCount;
-        int row = on_fx ? kPadRows : dj_cursor_ / MusicDisplay::kDjPadColumns;
-        int column = on_fx ? std::min(dj_cursor_ - DjEngine::kPadCount, MusicDisplay::kDjPadColumns - 1)
-                           : dj_cursor_ % MusicDisplay::kDjPadColumns;
-        row = (row + direction + kPadRows + 1) % (kPadRows + 1);
-        dj_cursor_ = row == kPadRows ? DjEngine::kPadCount + column
-                                     : row * MusicDisplay::kDjPadColumns + column;
-        RefreshMusicView(true);
+        DjMove(direction * MusicDisplay::kDjPadColumns);
     }
 
     // Hold L/R inside the player: volume down/up, repeating while held.

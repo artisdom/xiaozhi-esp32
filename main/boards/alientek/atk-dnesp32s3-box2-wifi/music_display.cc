@@ -176,9 +176,9 @@ void MusicDisplay::CreateDjPanel() {
     constexpr int kPad = 6, kGap = 4;
     const int inner_w = width_ - 2 * kPad;
     const int pad_h = line + 10, fx_h = line + 6;
-    // title, info, wave, spectrum, progress(8), pad grid (2 rows), effects, help.
-    const int fixed = 3 * line + 8 + 2 * pad_h + kGap + fx_h;
-    const int box_h = std::clamp((height_ - 2 * kPad - 7 * kGap - fixed) / 2, 24, 80);
+    // title, info, wave, spectrum, progress(8), pad grid (2 rows), effect grid (2 rows).
+    const int fixed = 2 * line + 8 + (2 * pad_h + kGap) + (2 * fx_h + kGap);
+    const int box_h = std::clamp((height_ - 2 * kPad - 6 * kGap - fixed) / 2, 24, 80);
 
     dj_panel_ = lv_obj_create(lv_display_get_screen_active(display_));
     lv_obj_set_size(dj_panel_, width_, height_);
@@ -260,11 +260,10 @@ void MusicDisplay::CreateDjPanel() {
     for (int i = 0; i < DjEngine::kPadCount; ++i)
         dj_pad_[i] = cell(pads, (i % kDjPadColumns) * (pad_w + kGap),
                           (i / kDjPadColumns) * (pad_h + kGap), pad_w, pad_h, &dj_pad_label_[i]);
-    auto* fx = box(fx_h);
-    const int fx_w = (inner_w - (kDjFxItems - 1) * kGap) / kDjFxItems;
+    auto* fx = box(2 * fx_h + kGap);
     for (int i = 0; i < kDjFxItems; ++i)
-        dj_fx_[i] = cell(fx, i * (fx_w + kGap), 0, fx_w, fx_h, &dj_fx_label_[i]);
-    dj_help_ = label();
+        dj_fx_[i] = cell(fx, (i % kDjPadColumns) * (pad_w + kGap),
+                         (i / kDjPadColumns) * (fx_h + kGap), pad_w, fx_h, &dj_fx_label_[i]);
 }
 
 void MusicDisplay::UpdateDjPanel(const MusicSnapshot& state, int volume, const MusicDjView& d) {
@@ -320,5 +319,4 @@ void MusicDisplay::UpdateDjPanel(const MusicSnapshot& state, int volume, const M
                    d.selected == DjEngine::kPadCount + i);
         lv_obj_center(dj_fx_label_[i]);
     }
-    text(dj_help_, "L/R:select  2xL/R:row  M:fire/toggle  hold L/R:vol  Q:back");
 }

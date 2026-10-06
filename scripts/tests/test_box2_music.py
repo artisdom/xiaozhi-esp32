@@ -134,17 +134,46 @@ class Box2MusicTest(unittest.TestCase):
                     for (size_t off = 0; off < v.size(); off += 600) dj.Process(v.data() + off, 600, rate);
                     assert(v[0] == 20000 && v[6720] > 8000 && v[3000] == 0);
                 }
-                {   // Gate silences part of a steady tone; crush leaves it audible.
+                {   // Gate silences part of a steady tone.
                     DjEngine dj; dj.SetFx(DjEngine::kFxGate);
                     auto tone = Sine(500, 24000);
                     for (size_t off = 0; off < tone.size(); off += 600) dj.Process(tone.data() + off, 600, rate);
                     int quiet = 0;
                     for (size_t i = 0; i < tone.size(); ++i) quiet += std::abs(tone[i]) < 200;
                     assert(quiet > 6000);
-                    DjEngine dj2; dj2.SetFx(DjEngine::kFxCrush);
-                    auto t2 = Sine(500, 2400);
-                    dj2.Process(t2.data(), t2.size(), rate);
-                    assert(Rms(t2) > 5000);
+                }
+                {   // Reverb leaves a decaying tail after an impulse and stays bounded.
+                    DjEngine dj; dj.SetFx(DjEngine::kFxReverb);
+                    std::vector<int16_t> v(48000, 0); v[0] = 20000;
+                    for (size_t off = 0; off < v.size(); off += 600) dj.Process(v.data() + off, 600, rate);
+                    auto energy = [&](size_t from, size_t to) {
+                        double e = 0; for (size_t i = from; i < to; ++i) e += double(v[i]) * v[i]; return e; };
+                    assert(energy(1200, 12000) > 1e6);                  // Tail right after the hit.
+                    assert(energy(36000, 48000) < energy(1200, 12000));  // It decays.
+                    for (auto sample : v) assert(sample > -32768 && sample < 32767);
+                }
+                {   // Flanger and robot change the signal; wobble acts as a moving low-pass.
+                    for (int fx : {int(DjEngine::kFxFlanger), int(DjEngine::kFxRobot)}) {
+                        DjEngine dj; dj.SetFx(fx);
+                        auto tone = Sine(1000, 12000), dry = Sine(1000, 12000);
+                        for (size_t off = 0; off < tone.size(); off += 600) dj.Process(tone.data() + off, 600, rate);
+                        int different = 0;
+                        for (size_t i = 6000; i < tone.size(); ++i) different += std::abs(tone[i] - dry[i]) > 500;
+                        assert(different > 2000);
+                    }
+                    DjEngine dj; dj.SetFx(DjEngine::kFxWobble);
+                    auto hi = Sine(6000, 24000);
+                    for (size_t off = 0; off < hi.size(); off += 600) dj.Process(hi.data() + off, 600, rate);
+                    assert(Rms(hi, 6000) < 0.3 * 12000 / std::sqrt(2.0));
+                }
+                {   // Switching between echo and reverb never reuses stale delay memory.
+                    DjEngine dj; dj.SetFx(DjEngine::kFxReverb);
+                    std::vector<int16_t> burst = Sine(300, 6000);
+                    for (size_t off = 0; off < burst.size(); off += 600) dj.Process(burst.data() + off, 600, rate);
+                    dj.SetFx(DjEngine::kFxEcho);
+                    std::vector<int16_t> silence(600, 0);
+                    dj.Process(silence.data(), silence.size(), rate);
+                    for (auto sample : silence) assert(sample == 0);
                 }
                 for (int pad = 0; pad < DjEngine::kPadCount; ++pad) {  // Every pad makes sound, then ends.
                     DjEngine dj;

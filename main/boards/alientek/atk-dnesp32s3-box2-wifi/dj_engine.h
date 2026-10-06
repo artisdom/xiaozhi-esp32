@@ -25,7 +25,18 @@ class DjEngine {
 public:
     static constexpr int kBands = 12;
     static constexpr int kWave = 48;
-    enum Fx { kFxOff, kFxLowpass, kFxHighpass, kFxEcho, kFxCrush, kFxGate, kFxCount };
+    enum Fx {
+        kFxOff,
+        kFxLowpass,
+        kFxHighpass,
+        kFxEcho,
+        kFxReverb,
+        kFxGate,
+        kFxFlanger,
+        kFxWobble,
+        kFxRobot,
+        kFxCount
+    };
     enum Pad {
         kPadKick,
         kPadSnare,
@@ -47,7 +58,7 @@ public:
     };
 
     static const char* FxName(int fx) {
-        static const char* const names[] = {"OFF", "LPF", "HPF", "ECHO", "BIT", "GATE"};
+        static const char* const names[] = {"OFF", "LPF", "HPF", "ECHO", "VERB", "GATE", "FLNG", "WOB", "ROBO"};
         return names[std::clamp(fx, 0, int(kFxCount) - 1)];
     }
     static const char* PadName(int pad) {
@@ -55,7 +66,7 @@ public:
         return names[std::clamp(pad, 0, int(kPadCount) - 1)];
     }
 
-    ~DjEngine() { FreeEcho(); }
+    ~DjEngine() { FreeFxMemory(); }
 
     int GetFx() const { return fx_.load(); }
     void SetFx(int fx) { fx_.store(std::clamp(fx, 0, int(kFxCount) - 1)); }
@@ -95,10 +106,16 @@ public:
             active_fx_ = fx;
             lp_[0] = lp_[1] = 0;
             gate_gain_ = 1;
-            hold_ = 0;
-            hold_count_ = 0;
-            if (fx == kFxEcho)
-                AllocateEcho();
+            svf_low_ = svf_band_ = 0;
+            flanger_.fill(0);
+            flanger_pos_ = 0;
+            lfo_phase_ = carrier_phase_ = 0;
+            echo_len_ = 0;       // Force the shared delay memory to be cleared for echo...
+            reverb_len_[0] = 0;  // ... and re-laid out for reverb.
+            if (fx == kFxEcho || fx == kFxReverb)
+                AllocateFxMemory();
+            else
+                FreeFxMemory();
         }
         StartPendingPads(fs);
         ApplyEffectAndPads(pcm, count, fs, fx);
@@ -112,7 +129,8 @@ private:
         float phase = 0, phase2 = 0, env = 0, env2 = 0, freq = 0, prev = 0;
     };
     static constexpr float kTwoPi = 6.2831853f;
-    static constexpr int kMaxEchoSamples = 8000;  // 280 ms at up to 28.5 kHz.
+    static constexpr int kMaxFxSamples = 8000;  // Echo: 280 ms; reverb: about 6000 at 48 kHz.
+    static constexpr int kFlangerSamples = 512;
 
     std::atomic<int> fx_{kFxOff};
     std::atomic<uint32_t> pending_pads_{0};
@@ -124,10 +142,19 @@ private:
     float lp_[2] = {0, 0};
     float gate_gain_ = 1;
     uint32_t gate_pos_ = 0;
-    float hold_ = 0;
-    int hold_count_ = 0;
-    int16_t* echo_ = nullptr;
+    float svf_low_ = 0, svf_band_ = 0;  // Wobble filter.
+    float lfo_phase_ = 0, carrier_phase_ = 0;
+    std::array<float, kFlangerSamples> flanger_ = {};
+    int flanger_pos_ = 0;
+    // One PSRAM block shared by echo and reverb (only one effect is active at a time).
+    int16_t* fx_mem_ = nullptr;
     int echo_len_ = 0, echo_pos_ = 0;
+    // Reverb layout inside fx_mem_: four combs then two all-passes.
+    static constexpr int kCombs = 4, kAllpasses = 2;
+    int reverb_len_[kCombs + kAllpasses] = {};
+    int reverb_off_[kCombs + kAllpasses] = {};
+    int reverb_pos_[kCombs + kAllpasses] = {};
+    float comb_damp_[kCombs] = {};
 
     // Sampler state.
     std::array<Voice, kPadCount> voices_;
@@ -142,26 +169,51 @@ private:
     std::array<int, 8> intervals_ = {};
     int interval_count_ = 0;
 
-    void AllocateEcho() {
-        if (echo_)
+    void AllocateFxMemory() {
+        if (fx_mem_)
             return;
 #ifdef ESP_PLATFORM
-        echo_ = static_cast<int16_t*>(
-            heap_caps_calloc(kMaxEchoSamples, sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        fx_mem_ = static_cast<int16_t*>(
+            heap_caps_calloc(kMaxFxSamples, sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
 #else
-        echo_ = static_cast<int16_t*>(std::calloc(kMaxEchoSamples, sizeof(int16_t)));
+        fx_mem_ = static_cast<int16_t*>(std::calloc(kMaxFxSamples, sizeof(int16_t)));
 #endif
         echo_pos_ = 0;
+        echo_len_ = 0;
     }
-    void FreeEcho() {
-        if (!echo_)
+    void FreeFxMemory() {
+        if (!fx_mem_)
             return;
 #ifdef ESP_PLATFORM
-        heap_caps_free(echo_);
+        heap_caps_free(fx_mem_);
 #else
-        std::free(echo_);
+        std::free(fx_mem_);
 #endif
-        echo_ = nullptr;
+        fx_mem_ = nullptr;
+    }
+
+    // Lay out the reverb delay lines for this sample rate and clear them.
+    void SetupReverb(float fs) {
+        static constexpr int kBase[kCombs + kAllpasses] = {1116, 1188, 1277, 1356, 556, 441};
+        int offset = 0;
+        for (int i = 0; i < kCombs + kAllpasses; ++i) {
+            reverb_len_[i] = std::max(8, int(kBase[i] * fs / 44100.0f));
+            reverb_off_[i] = offset;
+            reverb_pos_[i] = 0;
+            offset += reverb_len_[i];
+        }
+        if (offset > kMaxFxSamples) {  // Absurdly high rate: shrink to fit.
+            for (int i = 0; i < kCombs + kAllpasses; ++i)
+                reverb_len_[i] = std::max(8, reverb_len_[i] * kMaxFxSamples / offset);
+            offset = 0;
+            for (int i = 0; i < kCombs + kAllpasses; ++i) {
+                reverb_off_[i] = offset;
+                offset += reverb_len_[i];
+            }
+        }
+        std::memset(fx_mem_, 0, kMaxFxSamples * sizeof(int16_t));
+        for (float& d : comb_damp_)
+            d = 0;
     }
 
     float Noise() {
@@ -285,7 +337,7 @@ private:
         }
         const float lp_a = 1.0f - std::exp(-kTwoPi * 600.0f / fs);
         const float hp_a = 1.0f - std::exp(-kTwoPi * 1200.0f / fs);
-        const int echo_len = std::min(kMaxEchoSamples, int(fs * 0.28f));
+        const int echo_len = std::min(kMaxFxSamples, int(fs * 0.28f));
         const uint32_t gate_period = uint32_t(fs / 8.0f);
         const float gate_step = 1.0f / (0.004f * fs);
         for (size_t i = 0; i < count; ++i) {
@@ -301,24 +353,88 @@ private:
                 y = x - lp_[0];
                 break;
             case kFxEcho:
-                if (echo_) {
-                    if (echo_len_ != echo_len) {  // Sample rate changed: restart the line.
+                if (fx_mem_) {
+                    if (echo_len_ != echo_len) {  // First use or sample rate changed.
                         echo_len_ = echo_len;
-                        std::memset(echo_, 0, kMaxEchoSamples * sizeof(int16_t));
+                        std::memset(fx_mem_, 0, kMaxFxSamples * sizeof(int16_t));
                         echo_pos_ = 0;
                     }
-                    float d = echo_[echo_pos_];
+                    float d = fx_mem_[echo_pos_];
                     y = x + 0.5f * d;
-                    echo_[echo_pos_] = int16_t(std::clamp(x + 0.45f * d, -32768.0f, 32767.0f));
+                    fx_mem_[echo_pos_] = int16_t(std::clamp(x + 0.45f * d, -32768.0f, 32767.0f));
                     if (++echo_pos_ >= echo_len_)
                         echo_pos_ = 0;
                 }
                 break;
-            case kFxCrush:
-                if (hold_count_ == 0)
-                    hold_ = float(int(x) & 0xF800);  // 5 bits, held for 4 samples.
-                hold_count_ = (hold_count_ + 1) % 4;
-                y = hold_;
+            case kFxReverb:
+                if (fx_mem_) {
+                    if (!reverb_len_[0])
+                        SetupReverb(fs);
+                    // Schroeder reverb: four damped parallel combs into two all-passes.
+                    const float input = x * 0.25f;
+                    float wet = 0;
+                    for (int c = 0; c < kCombs; ++c) {
+                        int16_t* line = fx_mem_ + reverb_off_[c];
+                        float out = line[reverb_pos_[c]];
+                        comb_damp_[c] = out * 0.7f + comb_damp_[c] * 0.3f;
+                        line[reverb_pos_[c]] =
+                            int16_t(std::clamp(input + comb_damp_[c] * 0.84f, -32768.0f, 32767.0f));
+                        if (++reverb_pos_[c] >= reverb_len_[c])
+                            reverb_pos_[c] = 0;
+                        wet += out;
+                    }
+                    for (int a = kCombs; a < kCombs + kAllpasses; ++a) {
+                        int16_t* line = fx_mem_ + reverb_off_[a];
+                        float delayed = line[reverb_pos_[a]];
+                        line[reverb_pos_[a]] =
+                            int16_t(std::clamp(wet + delayed * 0.5f, -32768.0f, 32767.0f));
+                        wet = delayed - wet;
+                        if (++reverb_pos_[a] >= reverb_len_[a])
+                            reverb_pos_[a] = 0;
+                    }
+                    y = x * 0.75f + wet * 0.7f;
+                }
+                break;
+            case kFxFlanger: {
+                // 1-5 ms delay swept by a 0.3 Hz LFO, with feedback.
+                lfo_phase_ += kTwoPi * 0.3f / fs;
+                if (lfo_phase_ > kTwoPi)
+                    lfo_phase_ -= kTwoPi;
+                float delay = std::min(fs * (0.003f + 0.002f * std::sin(lfo_phase_)),
+                                       float(kFlangerSamples - 2));
+                float read = float(flanger_pos_) - delay;
+                if (read < 0)
+                    read += kFlangerSamples;
+                int i0 = int(read);
+                float frac = read - float(i0);
+                float d = flanger_[i0 % kFlangerSamples] * (1 - frac) +
+                          flanger_[(i0 + 1) % kFlangerSamples] * frac;
+                flanger_[flanger_pos_] = std::clamp(x + 0.5f * d, -32768.0f, 32767.0f);
+                flanger_pos_ = (flanger_pos_ + 1) % kFlangerSamples;
+                y = x * 0.7f + d * 0.8f;
+                break;
+            }
+            case kFxWobble: {
+                // Resonant low-pass (state-variable) swept between 150 Hz and 2.5 kHz at 1.5 Hz.
+                lfo_phase_ += kTwoPi * 1.5f / fs;
+                if (lfo_phase_ > kTwoPi)
+                    lfo_phase_ -= kTwoPi;
+                float cutoff = 150.0f + 2350.0f * (0.5f + 0.5f * std::sin(lfo_phase_));
+                float f = std::min(2.0f * std::sin(3.14159265f * cutoff / fs), 0.9f);
+                svf_low_ += f * svf_band_;
+                float high = x - svf_low_ - 0.35f * svf_band_;
+                svf_band_ += f * high;
+                svf_low_ = std::clamp(svf_low_, -60000.0f, 60000.0f);
+                svf_band_ = std::clamp(svf_band_, -60000.0f, 60000.0f);
+                y = svf_low_;
+                break;
+            }
+            case kFxRobot:
+                // Ring modulation with a 220 Hz carrier keeps a little of the dry signal.
+                carrier_phase_ += kTwoPi * 220.0f / fs;
+                if (carrier_phase_ > kTwoPi)
+                    carrier_phase_ -= kTwoPi;
+                y = x * (0.25f + 0.9f * std::sin(carrier_phase_));
                 break;
             case kFxGate: {
                 float target = (gate_pos_++ % gate_period) < gate_period / 2 ? 1.0f : 0.0f;

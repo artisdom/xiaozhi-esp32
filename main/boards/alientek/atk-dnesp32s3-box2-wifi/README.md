@@ -82,15 +82,16 @@ audio that is actually being played:
 - **Info line** – BPM, active effect and volume.
 - **Pads** – a 4×2 grid of synthesised one-shots mixed over the song: KICK, SNARE,
   HAT, CLAP, HORN, LASER, BASS and SIREN. A pad fills with colour while it fires.
-- **Effects** – a row of five: LPF (low-pass), HPF (high-pass), ECHO (280 ms
-  delay), BIT (5-bit, sample-rate reduction) and GATE (8 Hz stutter). One effect
-  is active at a time; selecting the active one again turns it off. The
+- **Effects** – a 4×2 grid below the pads: LPF (low-pass), HPF (high-pass), ECHO
+  (280 ms delay), VERB (reverb), GATE (8 Hz stutter), FLNG (flanger), WOB
+  (resonant low-pass swept at 1.5 Hz) and ROBO (220 Hz ring modulator). One
+  effect is active at a time; selecting the active one again turns it off. The
   visualiser shows the processed output.
 
 L/R click moves a thick light cursor through the pads and then the effects, L/R
-double-click jumps between the two pad rows and the effect row, and **M** fires
-the highlighted pad (on press, so there is no click delay) or toggles the
-highlighted effect.
+double-click moves a row up or down in the 4-column grid (wrapping), and **M**
+fires the highlighted pad (on press, so there is no click delay) or toggles the
+highlighted effect. The screen has no hint line; this table is the key map.
 
 Effects and pads only work while a track is playing, and are not applied to
 voice-assistant audio.

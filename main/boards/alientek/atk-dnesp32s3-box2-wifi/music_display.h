@@ -71,7 +71,6 @@ private:
     lv_obj_t* dj_pad_label_[box2_music::DjEngine::kPadCount] = {};
     lv_obj_t* dj_fx_[kDjFxItems] = {};
     lv_obj_t* dj_fx_label_[kDjFxItems] = {};
-    lv_obj_t* dj_help_ = nullptr;
     void CreateDjPanel();
     void UpdateDjPanel(const MusicSnapshot& state, int volume, const MusicDjView& view);
 };
