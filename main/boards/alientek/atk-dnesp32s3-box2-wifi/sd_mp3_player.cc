@@ -83,6 +83,9 @@ static void DiagnoseCard(const sdspi_device_config_t& slot_config) {
                     ESP_LOGW(kTag, "SD diagnose: partition %d type 0x%02X start %u size %u", i + 1,
                              e[4], (unsigned)lba, (unsigned)size);
                 }
+                if (sector[450] == 0xEE)
+                    ESP_LOGE(kTag, "SD card uses a GPT partition table, which FatFs cannot read; "
+                                   "repartition it with an MBR (msdos) table and format FAT32");
                 const uint8_t* e = &sector[446];
                 uint32_t lba = e[8] | e[9] << 8 | e[10] << 16 | uint32_t(e[11]) << 24;
                 if (lba) {
