@@ -148,6 +148,13 @@ public:
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
 
+    // Local PCM is mono, at the codec output rate. Producers run outside audio/main tasks.
+    // Server audio and ResetDecoder cancel the token and discard queued local PCM.
+    uint32_t BeginPcmPlayback();
+    esp_err_t QueuePcm(uint32_t token, const int16_t* samples, size_t count);
+    bool IsPcmPlaybackPending(uint32_t token);
+    void EndPcmPlayback(uint32_t token, bool discard);
+
 private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
@@ -194,6 +201,7 @@ private:
     bool output_in_flight_ = false;
     bool playback_drained_notified_ = true;
     uint32_t playback_generation_ = 0;
+    uint32_t pcm_playback_token_ = 0;
     // For server AEC
     FixedQueue<uint32_t, MAX_TIMESTAMPS_IN_QUEUE> timestamp_queue_;
 

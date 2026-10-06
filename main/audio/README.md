@@ -85,6 +85,16 @@ flowchart LR
 
 ## Tasks and power management
 
+Local PCM producers can acquire an exclusive token with `BeginPcmPlayback()`,
+then submit mono PCM at the codec output rate with `QueuePcm()`. Chunks are capped
+at 100 ms and use the existing two-entry playback queue. Queue waits time out
+after 50 ms so producers can check cancellation without blocking audio or main
+tasks. An active token prevents playback-drained notifications and idle sleep
+between chunks. Producers drain pending output before `EndPcmPlayback()` on normal
+completion, or discard it on cancellation. Incoming Opus packets, decoder reset
+and service shutdown invalidate the token and wake waiting producers. A stale
+producer cannot clear a newer producer's queued audio.
+
 - `AudioInputTask` reads codec input and feeds the selected engine.
 - `AudioOutputTask` drains decoded PCM to the codec output.
 - `OpusCodecTask` encodes uplink PCM and decodes downlink packets.

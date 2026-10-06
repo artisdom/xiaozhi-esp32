@@ -1,18 +1,19 @@
-#include "wifi_board.h"
-#include "codecs/es8389_audio_codec.h"
-#include "display/lcd_display.h"
-#include "system_reset.h"
 #include "application.h"
-#include "button.h"
-#include "config.h"
-#include "power_save_timer.h"
-#include "led/single_led.h"
 #include "assets/lang_config.h"
+#include "button.h"
+#include "codecs/es8389_audio_codec.h"
+#include "config.h"
+#include "display/lcd_display.h"
+#include "led/single_led.h"
 #include "power_manager.h"
+#include "power_save_timer.h"
+#include "sd_mp3_player.h"
+#include "system_reset.h"
+#include "wifi_board.h"
 
-#include "i2c_device.h"
-#include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
+#include <esp_log.h>
+#include "i2c_device.h"
 
 #include <driver/rtc_io.h>
 #include <esp_sleep.h>
@@ -22,7 +23,7 @@
 
 class atk_dnesp32s3_box2_wifi : public WifiBoard {
 private:
-    i2c_master_bus_handle_t i2c_bus_;   
+    i2c_master_bus_handle_t i2c_bus_;
     LcdDisplay* display_;
     esp_io_expander_handle_t io_exp_handle;
     button_handle_t btns;
@@ -36,6 +37,7 @@ private:
     esp_lcd_panel_handle_t panel = nullptr;
     int ticks_ = 0;
     const int kChgCtrlInterval = 5;
+    SdMp3Player music_player_;
 
     void InitializeBoardPowerManager() {
         instance_ = this;
@@ -47,31 +49,35 @@ private:
         }
 
         esp_timer_create_args_t wake_display_timer_args = {
-            .callback = [](void *arg) {
-                atk_dnesp32s3_box2_wifi* self = static_cast<atk_dnesp32s3_box2_wifi*>(arg);
+            .callback =
+                [](void* arg) {
+                    atk_dnesp32s3_box2_wifi* self = static_cast<atk_dnesp32s3_box2_wifi*>(arg);
 
-                self->ticks_ ++;
-                if (self->ticks_ % self->kChgCtrlInterval == 0) {
-                    if (self->IoExpanderGetLevel(XIO_CHRG) == 0) {
-                        self->power_status_ = kDeviceTypecSupply;
-                    } else {
-                        self->power_status_ = kDeviceBatterySupply;
+                    self->ticks_++;
+                    if (self->ticks_ % self->kChgCtrlInterval == 0) {
+                        if (self->IoExpanderGetLevel(XIO_CHRG) == 0) {
+                            self->power_status_ = kDeviceTypecSupply;
+                        } else {
+                            self->power_status_ = kDeviceBatterySupply;
+                        }
+
+                        /* 低于某个电量，会自动关机 */
+                        if (self->power_manager_->low_voltage_ < 2630 &&
+                            self->power_status_ == kDeviceBatterySupply) {
+                            esp_timer_stop(self->power_manager_->timer_handle_);
+
+                            esp_io_expander_set_dir(self->io_exp_handle, XIO_CHG_CTRL,
+                                                    IO_EXPANDER_OUTPUT);
+                            esp_io_expander_set_level(self->io_exp_handle, XIO_CHG_CTRL, 0);
+                            vTaskDelay(pdMS_TO_TICKS(100));
+
+                            esp_io_expander_set_dir(self->io_exp_handle, XIO_CHG_CTRL,
+                                                    IO_EXPANDER_INPUT);
+                            esp_io_expander_set_level(self->io_exp_handle, XIO_CHG_CTRL, 0);
+                            vTaskDelay(pdMS_TO_TICKS(100));
+                        }
                     }
-
-                    /* 低于某个电量，会自动关机 */
-                    if (self->power_manager_->low_voltage_ < 2630 && self->power_status_ == kDeviceBatterySupply) {
-                        esp_timer_stop(self->power_manager_->timer_handle_);
-
-                        esp_io_expander_set_dir(self->io_exp_handle, XIO_CHG_CTRL, IO_EXPANDER_OUTPUT);
-                        esp_io_expander_set_level(self->io_exp_handle, XIO_CHG_CTRL, 0);
-                        vTaskDelay(pdMS_TO_TICKS(100));
-
-                        esp_io_expander_set_dir(self->io_exp_handle, XIO_CHG_CTRL, IO_EXPANDER_INPUT);
-                        esp_io_expander_set_level(self->io_exp_handle, XIO_CHG_CTRL, 0);
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                }
-            },
+                },
             .arg = this,
             .dispatch_method = ESP_TIMER_TASK,
             .name = "wake_update_timer",
@@ -106,7 +112,7 @@ private:
             if (power_status_ == kDeviceBatterySupply) {
                 GetBacklight()->SetBrightness(0);
                 esp_timer_stop(power_manager_->timer_handle_);
-                esp_io_expander_set_dir( io_exp_handle, XIO_CHG_CTRL, IO_EXPANDER_OUTPUT);
+                esp_io_expander_set_dir(io_exp_handle, XIO_CHG_CTRL, IO_EXPANDER_OUTPUT);
                 esp_io_expander_set_level(io_exp_handle, XIO_CHG_CTRL, 0);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 esp_io_expander_set_level(io_exp_handle, XIO_SYS_POW, 0);
@@ -136,12 +142,12 @@ private:
         GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
     }
 
-    void audio_volume_minimum(){
+    void audio_volume_minimum() {
         GetAudioCodec()->SetOutputVolume(0);
         GetDisplay()->ShowNotification(Lang::Strings::MUTED);
     }
 
-    void audio_volume_maxmum(){
+    void audio_volume_maxmum() {
         GetAudioCodec()->SetOutputVolume(100);
         GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
     }
@@ -159,7 +165,8 @@ private:
 
     void InitializeIoExpander() {
         esp_err_t ret = ESP_OK;
-        esp_io_expander_new_i2c_tca95xx_16bit(i2c_bus_, ESP_IO_EXPANDER_I2C_TCA9555_ADDRESS_000, &io_exp_handle);
+        esp_io_expander_new_i2c_tca95xx_16bit(i2c_bus_, ESP_IO_EXPANDER_I2C_TCA9555_ADDRESS_000,
+                                              &io_exp_handle);
 
         ret |= esp_io_expander_set_dir(io_exp_handle, DRV_IO_EXP_OUTPUT_MASK, IO_EXPANDER_OUTPUT);
         ret |= esp_io_expander_set_dir(io_exp_handle, DRV_IO_EXP_INPUT_MASK, IO_EXPANDER_INPUT);
@@ -184,9 +191,10 @@ private:
             .glitch_ignore_cnt = 7,
             .intr_priority = 0,
             .trans_queue_depth = 0,
-            .flags = {
-                .enable_internal_pullup = 1,
-            },
+            .flags =
+                {
+                    .enable_internal_pullup = 1,
+                },
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
     }
@@ -194,20 +202,11 @@ private:
     void InitializeButtons() {
         instance_ = this;
 
-        button_config_t l_btn_cfg = {
-            .long_press_time = 800,
-            .short_press_time = 500
-        };
+        button_config_t l_btn_cfg = {.long_press_time = 800, .short_press_time = 500};
 
-        button_config_t m_btn_cfg = {
-            .long_press_time = 800,
-            .short_press_time = 500
-        };
+        button_config_t m_btn_cfg = {.long_press_time = 800, .short_press_time = 500};
 
-        button_config_t r_btn_cfg = {
-            .long_press_time = 800,
-            .short_press_time = 500
-        };
+        button_config_t r_btn_cfg = {.long_press_time = 800, .short_press_time = 500};
 
         button_driver_t* xio_l_btn_driver_ = nullptr;
         button_driver_t* xio_m_btn_driver_ = nullptr;
@@ -218,77 +217,112 @@ private:
 
         xio_l_btn_driver_ = (button_driver_t*)calloc(1, sizeof(button_driver_t));
         xio_l_btn_driver_->enable_power_save = false;
-        xio_l_btn_driver_->get_key_level = [](button_driver_t *button_driver) -> uint8_t {
+        xio_l_btn_driver_->get_key_level = [](button_driver_t* button_driver) -> uint8_t {
             return !instance_->IoExpanderGetLevel(XIO_KEY_L);
         };
         ESP_ERROR_CHECK(iot_button_create(&l_btn_cfg, xio_l_btn_driver_, &l_btn_handle));
 
         xio_m_btn_driver_ = (button_driver_t*)calloc(1, sizeof(button_driver_t));
         xio_m_btn_driver_->enable_power_save = false;
-        xio_m_btn_driver_->get_key_level = [](button_driver_t *button_driver) -> uint8_t {
+        xio_m_btn_driver_->get_key_level = [](button_driver_t* button_driver) -> uint8_t {
             return instance_->IoExpanderGetLevel(XIO_KEY_M);
         };
         ESP_ERROR_CHECK(iot_button_create(&m_btn_cfg, xio_m_btn_driver_, &m_btn_handle));
 
-        button_gpio_config_t r_cfg = {
-            .gpio_num = R_BUTTON_GPIO,
-            .active_level = BUTTON_INACTIVE,
-            .enable_power_save = false,
-            .disable_pull = false
-        };
+        button_gpio_config_t r_cfg = {.gpio_num = R_BUTTON_GPIO,
+                                      .active_level = BUTTON_INACTIVE,
+                                      .enable_power_save = false,
+                                      .disable_pull = false};
         ESP_ERROR_CHECK(iot_button_new_gpio_device(&r_btn_cfg, &r_cfg, &r_btn_handle));
 
-        iot_button_register_cb(l_btn_handle, BUTTON_PRESS_DOWN, nullptr, [](void* button_handle, void* usr_data) {
-            auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
-            self->power_save_timer_->WakeUp();
-            self->audio_volume_change(false);
-        }, this);
+        iot_button_register_cb(
+            l_btn_handle, BUTTON_PRESS_DOWN, nullptr,
+            [](void* button_handle, void* usr_data) {
+                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
+                self->power_save_timer_->WakeUp();
+                self->audio_volume_change(false);
+            },
+            this);
 
-        iot_button_register_cb(l_btn_handle, BUTTON_LONG_PRESS_START, nullptr, [](void* button_handle, void* usr_data) {
-            auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
-            self->power_save_timer_->WakeUp();
-            self->audio_volume_minimum();
-        }, this);
+        iot_button_register_cb(
+            l_btn_handle, BUTTON_LONG_PRESS_START, nullptr,
+            [](void* button_handle, void* usr_data) {
+                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
+                self->power_save_timer_->WakeUp();
+                self->audio_volume_minimum();
+            },
+            this);
 
-        iot_button_register_cb(m_btn_handle, BUTTON_PRESS_DOWN, nullptr, [](void* button_handle, void* usr_data) {
-            auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
-            self->power_save_timer_->WakeUp();
-            auto& app = Application::GetInstance();
-            app.ToggleChatState();
-        }, this);
+        iot_button_register_cb(
+            m_btn_handle, BUTTON_SINGLE_CLICK, nullptr,
+            [](void* button_handle, void* usr_data) {
+                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
+                self->power_save_timer_->WakeUp();
+                self->music_player_.Stop();
+                auto& app = Application::GetInstance();
+                app.ToggleChatState();
+            },
+            this);
 
-        iot_button_register_cb(m_btn_handle, BUTTON_LONG_PRESS_START, nullptr, [](void* button_handle, void* usr_data) {
-            auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
+        iot_button_register_cb(
+            m_btn_handle, BUTTON_DOUBLE_CLICK, nullptr,
+            [](void* button_handle, void* usr_data) {
+                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
+                Application::GetInstance().Schedule([self]() {
+                    self->power_save_timer_->WakeUp();
+                    if (self->music_player_.IsBusy()) {
+                        self->music_player_.Stop();
+                        self->GetDisplay()->ShowNotification("Music stopped");
+                    } else {
+                        auto result = self->music_player_.Start();
+                        self->GetDisplay()->ShowNotification(result ? result->c_str()
+                                                                    : result.error().c_str());
+                    }
+                });
+            },
+            this);
 
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
-                self->EnterWifiConfigMode();
-                return;
-            }
+        iot_button_register_cb(
+            m_btn_handle, BUTTON_LONG_PRESS_START, nullptr,
+            [](void* button_handle, void* usr_data) {
+                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
 
-            if (self->power_status_ == kDeviceBatterySupply) {
-                auto backlight = Board::GetInstance().GetBacklight();
-                backlight->SetBrightness(0);
-                esp_timer_stop(self->power_manager_->timer_handle_);
-                esp_io_expander_set_dir(self->io_exp_handle, XIO_CHG_CTRL, IO_EXPANDER_OUTPUT);
-                esp_io_expander_set_level(self->io_exp_handle, XIO_CHG_CTRL, 0);
-                vTaskDelay(pdMS_TO_TICKS(100));
-                esp_io_expander_set_level(self->io_exp_handle, XIO_SYS_POW, 0);
-                vTaskDelay(pdMS_TO_TICKS(100));
-            }
-        }, this);
+                auto& app = Application::GetInstance();
+                if (app.GetDeviceState() == kDeviceStateStarting) {
+                    self->EnterWifiConfigMode();
+                    return;
+                }
 
-        iot_button_register_cb(r_btn_handle, BUTTON_PRESS_DOWN, nullptr, [](void* button_handle, void* usr_data) {
-            auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
-            self->power_save_timer_->WakeUp();
-            self->audio_volume_change(true);
-        }, this);
+                if (self->power_status_ == kDeviceBatterySupply) {
+                    auto backlight = Board::GetInstance().GetBacklight();
+                    backlight->SetBrightness(0);
+                    esp_timer_stop(self->power_manager_->timer_handle_);
+                    esp_io_expander_set_dir(self->io_exp_handle, XIO_CHG_CTRL, IO_EXPANDER_OUTPUT);
+                    esp_io_expander_set_level(self->io_exp_handle, XIO_CHG_CTRL, 0);
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    esp_io_expander_set_level(self->io_exp_handle, XIO_SYS_POW, 0);
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+            },
+            this);
 
-        iot_button_register_cb(r_btn_handle, BUTTON_LONG_PRESS_START, nullptr, [](void* button_handle, void* usr_data) {
-            auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
-            self->power_save_timer_->WakeUp();
-            self->audio_volume_maxmum();
-        }, this);
+        iot_button_register_cb(
+            r_btn_handle, BUTTON_PRESS_DOWN, nullptr,
+            [](void* button_handle, void* usr_data) {
+                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
+                self->power_save_timer_->WakeUp();
+                self->audio_volume_change(true);
+            },
+            this);
+
+        iot_button_register_cb(
+            r_btn_handle, BUTTON_LONG_PRESS_START, nullptr,
+            [](void* button_handle, void* usr_data) {
+                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
+                self->power_save_timer_->WakeUp();
+                self->audio_volume_maxmum();
+            },
+            this);
     }
 
     void InitializeSt7789Display() {
@@ -315,16 +349,17 @@ private:
             .dc_gpio_num = LCD_PIN_DC,
             .wr_gpio_num = LCD_PIN_WR,
             .clk_src = LCD_CLK_SRC_DEFAULT,
-            .data_gpio_nums = {
-                LCD_PIN_D0,
-                LCD_PIN_D1,
-                LCD_PIN_D2,
-                LCD_PIN_D3,
-                LCD_PIN_D4,
-                LCD_PIN_D5,
-                LCD_PIN_D6,
-                LCD_PIN_D7,
-            },
+            .data_gpio_nums =
+                {
+                    LCD_PIN_D0,
+                    LCD_PIN_D1,
+                    LCD_PIN_D2,
+                    LCD_PIN_D3,
+                    LCD_PIN_D4,
+                    LCD_PIN_D5,
+                    LCD_PIN_D6,
+                    LCD_PIN_D7,
+                },
             .bus_width = 8,
             .max_transfer_bytes = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t),
             .dma_burst_size = 64,
@@ -339,17 +374,19 @@ private:
             .user_ctx = nullptr,
             .lcd_cmd_bits = 8,
             .lcd_param_bits = 8,
-            .dc_levels = {
-                .dc_idle_level = 1,
-                .dc_cmd_level = 0,
-                .dc_dummy_level = 0,
-                .dc_data_level = 1,
-            },
-            .flags = {
-                .cs_active_high = 0,        
-                .pclk_active_neg = 0,       
-                .pclk_idle_low = 0,           
-            },
+            .dc_levels =
+                {
+                    .dc_idle_level = 1,
+                    .dc_cmd_level = 0,
+                    .dc_dummy_level = 0,
+                    .dc_data_level = 1,
+                },
+            .flags =
+                {
+                    .cs_active_high = 0,
+                    .pclk_active_neg = 0,
+                    .pclk_idle_low = 0,
+                },
         };
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(i80_bus, &io_config, &panel_io));
 
@@ -363,35 +400,42 @@ private:
         esp_lcd_panel_init(panel);
         esp_lcd_panel_invert_color(panel, true);
         esp_lcd_panel_set_gap(panel, 0, 0);
-        esp_lcd_panel_io_tx_param(panel_io, 0xCF, (uint8_t[]) {0x00,0x83,0x30}, 3);
-        esp_lcd_panel_io_tx_param(panel_io, 0xED, (uint8_t[]) {0x64,0x03,0x12,0x81}, 4);
-        esp_lcd_panel_io_tx_param(panel_io, 0xE8, (uint8_t[]) {0x85,0x01,0x79}, 3);
-        esp_lcd_panel_io_tx_param(panel_io, 0xCB, (uint8_t[]) {0x39,0x2C,0x00,0x34,0x02}, 5);
-        esp_lcd_panel_io_tx_param(panel_io, 0xF7, (uint8_t[]) {0x20}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0xEA, (uint8_t[]) {0x00,0x00}, 2);
-        esp_lcd_panel_io_tx_param(panel_io, 0xbb, (uint8_t[]) {0x20}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0xc3, (uint8_t[]) {0x00}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0xC4, (uint8_t[]) {0x20}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0xC5, (uint8_t[]) {0x20}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0xC6, (uint8_t[]) {0x10}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0xC7, (uint8_t[]) {0xB0}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0x36, (uint8_t[]) {0x60}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0x3A, (uint8_t[]) {0x55}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0xB1, (uint8_t[]) {0x00,0x1B}, 2);
-        esp_lcd_panel_io_tx_param(panel_io, 0xF2, (uint8_t[]) {0x08}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0x26, (uint8_t[]) {0x01}, 1);
-        esp_lcd_panel_io_tx_param(panel_io, 0xE0, (uint8_t[]) {0xD0,0x00,0x02,0x07,0x0A,0x28,0x32,0x44,0x42,0x06,0x0E,0x12,0x14,0x17}, 14);
-        esp_lcd_panel_io_tx_param(panel_io, 0xE1, (uint8_t[]) {0xD0,0x00,0x02,0x07,0x0A,0x28,0x31,0x54,0x47,0x0E,0x1C,0x17,0x1B,0x1E}, 14);
-        esp_lcd_panel_io_tx_param(panel_io, 0xB7, (uint8_t[]) {0x07}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0xCF, (uint8_t[]){0x00, 0x83, 0x30}, 3);
+        esp_lcd_panel_io_tx_param(panel_io, 0xED, (uint8_t[]){0x64, 0x03, 0x12, 0x81}, 4);
+        esp_lcd_panel_io_tx_param(panel_io, 0xE8, (uint8_t[]){0x85, 0x01, 0x79}, 3);
+        esp_lcd_panel_io_tx_param(panel_io, 0xCB, (uint8_t[]){0x39, 0x2C, 0x00, 0x34, 0x02}, 5);
+        esp_lcd_panel_io_tx_param(panel_io, 0xF7, (uint8_t[]){0x20}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0xEA, (uint8_t[]){0x00, 0x00}, 2);
+        esp_lcd_panel_io_tx_param(panel_io, 0xbb, (uint8_t[]){0x20}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0xc3, (uint8_t[]){0x00}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0xC4, (uint8_t[]){0x20}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0xC5, (uint8_t[]){0x20}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0xC6, (uint8_t[]){0x10}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0xC7, (uint8_t[]){0xB0}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0x36, (uint8_t[]){0x60}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0x3A, (uint8_t[]){0x55}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0xB1, (uint8_t[]){0x00, 0x1B}, 2);
+        esp_lcd_panel_io_tx_param(panel_io, 0xF2, (uint8_t[]){0x08}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0x26, (uint8_t[]){0x01}, 1);
+        esp_lcd_panel_io_tx_param(panel_io, 0xE0,
+                                  (uint8_t[]){0xD0, 0x00, 0x02, 0x07, 0x0A, 0x28, 0x32, 0x44, 0x42,
+                                              0x06, 0x0E, 0x12, 0x14, 0x17},
+                                  14);
+        esp_lcd_panel_io_tx_param(panel_io, 0xE1,
+                                  (uint8_t[]){0xD0, 0x00, 0x02, 0x07, 0x0A, 0x28, 0x31, 0x54, 0x47,
+                                              0x0E, 0x1C, 0x17, 0x1B, 0x1E},
+                                  14);
+        esp_lcd_panel_io_tx_param(panel_io, 0xB7, (uint8_t[]){0x07}, 1);
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-        display_ = new SpiLcdDisplay(panel_io, panel,
-                                    DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+        display_ = new SpiLcdDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                     DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
+                                     DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
 public:
-    atk_dnesp32s3_box2_wifi()  {
+    atk_dnesp32s3_box2_wifi() {
         InitializeI2c();
         InitializeIoExpander();
         InitializePowerSaveTimer();
@@ -400,28 +444,18 @@ public:
         InitializeButtons();
         GetBacklight()->RestoreBrightness();
         InitializeBoardPowerManager();
+        music_player_.InitializeTools();
     }
 
     virtual AudioCodec* GetAudioCodec() override {
         static Es8389AudioCodec audio_codec(
-            i2c_bus_, 
-            I2C_NUM_0, 
-            AUDIO_INPUT_SAMPLE_RATE, 
-            AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK, 
-            AUDIO_I2S_GPIO_BCLK, 
-            AUDIO_I2S_GPIO_WS, 
-            AUDIO_I2S_GPIO_DOUT, 
-            AUDIO_I2S_GPIO_DIN,
-            GPIO_NUM_NC, 
-            AUDIO_CODEC_ES8389_ADDR,
-            AUDIO_CODEC_USE_MCLK);
+            i2c_bus_, I2C_NUM_0, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_DIN, GPIO_NUM_NC, AUDIO_CODEC_ES8389_ADDR, AUDIO_CODEC_USE_MCLK);
         return &audio_codec;
     }
 
-    virtual Display* GetDisplay() override {
-        return display_;
-    }
+    virtual Display* GetDisplay() override { return display_; }
 
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);

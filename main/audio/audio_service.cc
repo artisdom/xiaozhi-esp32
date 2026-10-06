@@ -180,6 +180,7 @@ void AudioService::Stop() {
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
         ++playback_generation_;
+        pcm_playback_token_ = 0;
         audio_encode_queue_.clear();
         audio_decode_queue_.clear();
         audio_playback_queue_.clear();
@@ -608,6 +609,12 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
 
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    if (pcm_playback_token_ != 0) {
+        pcm_playback_token_ = 0;
+        ++playback_generation_;
+        audio_playback_queue_.clear();
+        audio_queue_cv_.notify_all();
+    }
     const uint32_t generation = playback_generation_;
     if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
         if (wait) {
@@ -800,6 +807,7 @@ void AudioService::ResetDecoder() {
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
         ++playback_generation_;
+        pcm_playback_token_ = 0;
         std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
         if (opus_decoder_ != nullptr) {
             esp_opus_dec_reset(opus_decoder_);
@@ -818,8 +826,71 @@ void AudioService::ResetDecoder() {
 }
 
 bool AudioService::IsPlaybackDrainedLocked() const {
-    return audio_decode_queue_.empty() && audio_playback_queue_.empty() && !decode_in_flight_ &&
-           !output_in_flight_;
+    return pcm_playback_token_ == 0 && audio_decode_queue_.empty() &&
+           audio_playback_queue_.empty() && !decode_in_flight_ && !output_in_flight_;
+}
+
+uint32_t AudioService::BeginPcmPlayback() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    if (service_stopped_.load() || !IsPlaybackDrainedLocked() || IsAudioProcessorRunning() ||
+        (xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_TESTING_RUNNING)) {
+        return 0;
+    }
+    if (++playback_generation_ == 0) {
+        ++playback_generation_;
+    }
+    pcm_playback_token_ = playback_generation_;
+    playback_drained_notified_ = false;
+    return pcm_playback_token_;
+}
+
+esp_err_t AudioService::QueuePcm(uint32_t token, const int16_t* samples, size_t count) {
+    if (codec_ == nullptr || samples == nullptr || count == 0 ||
+        count > static_cast<size_t>(codec_->output_sample_rate() / 10)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    auto cancelled = [this, token]() {
+        return token == 0 || pcm_playback_token_ != token || service_stopped_.load();
+    };
+    if (!audio_queue_cv_.wait_for(lock, std::chrono::milliseconds(50),
+                                  [&]() { return cancelled() || !audio_playback_queue_.full(); })) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (cancelled()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    AudioTask task;
+    task.type = kAudioTaskTypeDecodeToPlaybackQueue;
+    task.pcm.assign(samples, samples + count);
+    audio_playback_queue_.push_back(std::move(task));
+    audio_queue_cv_.notify_all();
+    return ESP_OK;
+}
+
+bool AudioService::IsPcmPlaybackPending(uint32_t token) {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return token != 0 && pcm_playback_token_ == token &&
+           (!audio_playback_queue_.empty() || output_in_flight_);
+}
+
+void AudioService::EndPcmPlayback(uint32_t token, bool discard) {
+    bool notify_drained = false;
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        if (token == 0 || pcm_playback_token_ != token) {
+            return;
+        }
+        pcm_playback_token_ = 0;
+        if (discard) {
+            audio_playback_queue_.clear();
+        }
+        notify_drained = MarkPlaybackDrainedLocked();
+        audio_queue_cv_.notify_all();
+    }
+    if (notify_drained && callbacks_.on_playback_drained) {
+        callbacks_.on_playback_drained();
+    }
 }
 
 bool AudioService::MarkPlaybackDrainedLocked() {

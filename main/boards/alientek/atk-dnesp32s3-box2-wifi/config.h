@@ -24,6 +24,13 @@ enum PowerSupply {
 
 #define R_BUTTON_GPIO GPIO_NUM_0
 
+// Onboard TF slot: SPI2, matching Espressif's esp32_s3_box_2 board definition.
+#define SD_SPI_HOST SPI2_HOST
+#define SD_CS_GPIO GPIO_NUM_15
+#define SD_MOSI_GPIO GPIO_NUM_16
+#define SD_SCLK_GPIO GPIO_NUM_17
+#define SD_MISO_GPIO GPIO_NUM_18
+
 #define XL9555_INT_GPIO GPIO_NUM_2
 #define XIO_IO_SBU2 (IO_EXPANDER_PIN_NUM_3)
 #define XIO_IO_SBU1 (IO_EXPANDER_PIN_NUM_4)
@@ -39,7 +46,7 @@ enum PowerSupply {
 #define XIO_CHG_CTRL (IO_EXPANDER_PIN_NUM_14)
 #define XIO_CHRG (IO_EXPANDER_PIN_NUM_15)
 
-#define DRV_IO_EXP_OUTPUT_MASK 0x3F18  
+#define DRV_IO_EXP_OUTPUT_MASK 0x3F18
 #define DRV_IO_EXP_INPUT_MASK 0xC0E7
 
 #define LCD_PIN_CS GPIO_NUM_14
@@ -68,4 +75,4 @@ enum PowerSupply {
 #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_21
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
 
-#endif // _BOARD_CONFIG_H_
+#endif  // _BOARD_CONFIG_H_

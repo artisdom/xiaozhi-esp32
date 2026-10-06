@@ -5,7 +5,11 @@
     "builds": [
         {
             "name": "atk-dnesp32s3-box2-wifi",
-            "sdkconfig_append": []
+            "sdkconfig_append": [
+                "CONFIG_FATFS_LFN_HEAP=y",
+                "CONFIG_FATFS_MAX_LFN=255",
+                "CONFIG_FATFS_API_ENCODING_UTF_8=y"
+            ]
         }
     ]
 }
