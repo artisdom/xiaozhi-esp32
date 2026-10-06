@@ -783,6 +783,8 @@ std::expected<void, std::string> SdMp3Player::PlayFile(const std::string& filena
     }
     bool decoded_any = false;
     unsigned frames = 0;
+    if (target == 0)
+        dj_.Reset();
     while (!Interrupted(revision)) {
         uint32_t frame_start = (point.sample_offset + elapsed_samples) * 1000 / info.sample_rate;
         if (frame_start >= info.duration_ms)
@@ -848,6 +850,7 @@ std::expected<void, std::string> SdMp3Player::PlayFile(const std::string& filena
         }
         decoded_any = true;
         if (frame_end > target) {
+            dj_.Process(pcm, count, output_rate);  // Effects, sampler and analysis.
             uint32_t offset =
                 target > frame_start
                     ? std::min<uint32_t>(count, uint64_t(target - frame_start) * output_rate / 1000)

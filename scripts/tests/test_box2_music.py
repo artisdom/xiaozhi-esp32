@@ -89,6 +89,93 @@ class Box2MusicTest(unittest.TestCase):
             }
         ''')
 
+    def test_dj_engine_effects_sampler_and_analysis(self):
+        self.compile_and_run(r'''
+            #include <cassert>
+            #include <cmath>
+            #include <vector>
+            #include "dj_engine.h"
+            using box2_music::DjEngine;
+            static std::vector<int16_t> Sine(double hz, int n, double amp = 12000, int rate = 24000) {
+                std::vector<int16_t> v(n);
+                for (int i = 0; i < n; ++i) v[i] = int16_t(amp * std::sin(6.2831853 * hz * i / rate));
+                return v;
+            }
+            static double Rms(const std::vector<int16_t>& v, size_t from = 0) {
+                double sum = 0;
+                for (size_t i = from; i < v.size(); ++i) sum += double(v[i]) * v[i];
+                return std::sqrt(sum / (v.size() - from));
+            }
+            int main() {
+                const int rate = 24000;
+                {   // Spectrum peaks in the band nearest the tone, in 0..100.
+                    DjEngine dj;
+                    auto tone = Sine(850, 600);
+                    dj.Process(tone.data(), tone.size(), rate);
+                    auto s = dj.GetSnapshot();
+                    int top = 0;
+                    for (int b = 1; b < DjEngine::kBands; ++b) if (s.bands[b] > s.bands[top]) top = b;
+                    assert(top == 5 && s.bands[5] > 60 && s.bands[5] <= 100);
+                    assert(s.frames == 1 && s.wave[DjEngine::kWave - 1] > 50);
+                }
+                {   // Low-pass removes a high tone, high-pass removes a low tone.
+                    DjEngine dj; dj.SetFx(DjEngine::kFxLowpass);
+                    auto hi = Sine(8000, 4800);
+                    dj.Process(hi.data(), hi.size(), rate);
+                    assert(Rms(hi, 2400) < 0.1 * 12000 / std::sqrt(2.0));
+                    DjEngine dj2; dj2.SetFx(DjEngine::kFxHighpass);
+                    auto lo = Sine(80, 4800);
+                    dj2.Process(lo.data(), lo.size(), rate);
+                    assert(Rms(lo, 2400) < 0.2 * 12000 / std::sqrt(2.0));
+                }
+                {   // Echo repeats an impulse 280 ms later.
+                    DjEngine dj; dj.SetFx(DjEngine::kFxEcho);
+                    std::vector<int16_t> v(24000, 0); v[0] = 20000;
+                    for (size_t off = 0; off < v.size(); off += 600) dj.Process(v.data() + off, 600, rate);
+                    assert(v[0] == 20000 && v[6720] > 8000 && v[3000] == 0);
+                }
+                {   // Gate silences part of a steady tone; crush leaves it audible.
+                    DjEngine dj; dj.SetFx(DjEngine::kFxGate);
+                    auto tone = Sine(500, 24000);
+                    for (size_t off = 0; off < tone.size(); off += 600) dj.Process(tone.data() + off, 600, rate);
+                    int quiet = 0;
+                    for (size_t i = 0; i < tone.size(); ++i) quiet += std::abs(tone[i]) < 200;
+                    assert(quiet > 6000);
+                    DjEngine dj2; dj2.SetFx(DjEngine::kFxCrush);
+                    auto t2 = Sine(500, 2400);
+                    dj2.Process(t2.data(), t2.size(), rate);
+                    assert(Rms(t2) > 5000);
+                }
+                for (int pad = 0; pad < DjEngine::kPadCount; ++pad) {  // Every pad makes sound, then ends.
+                    DjEngine dj;
+                    std::vector<int16_t> silence(24000, 0);
+                    dj.TriggerPad(pad);
+                    for (size_t off = 0; off < silence.size(); off += 600)
+                        dj.Process(silence.data() + off, 600, rate);
+                    assert(Rms(silence) > 100);
+                    int tail_peak = 0;
+                    for (size_t i = 22000; i < silence.size(); ++i) tail_peak = std::max(tail_peak, std::abs(int(silence[i])));
+                    assert(tail_peak == 0);
+                }
+                {   // A 120 BPM low-frequency pulse train is detected as roughly 120 BPM.
+                    DjEngine dj;
+                    for (int beat = 0; beat < 16; ++beat) {
+                        for (int frame = 0; frame < 20; ++frame) {  // 20 x 25 ms = 500 ms.
+                            std::vector<int16_t> v(600, 0);
+                            if (frame < 4) v = Sine(60, 600, 20000);
+                            dj.Process(v.data(), v.size(), rate);
+                        }
+                    }
+                    auto s = dj.GetSnapshot();
+                    assert(s.beats >= 10);
+                    assert(s.bpm >= 110 && s.bpm <= 130);
+                    dj.Reset();
+                    assert(dj.GetSnapshot().beats == 0 && dj.GetSnapshot().bpm == 0);
+                }
+                assert(DjEngine().NextFx() == DjEngine::kFxLowpass);
+            }
+        ''')
+
     def test_playlist_navigation_repeat_shuffle_and_refresh(self):
         self.compile_and_run(r'''
             #include <cassert>

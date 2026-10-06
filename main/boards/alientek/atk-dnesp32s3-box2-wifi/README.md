@@ -30,37 +30,57 @@ A missing or unreadable card leaves voice-assistant operation
 available and is reported through `self.music.status`. Cards are never formatted
 automatically.
 
-### Music player screen and buttons
+### Music player screens and buttons
 
-Double-click **M** to open the player. It has two screens, switched by holding
-**L**:
+Double-click **M** to open the player. It has three screens; hold **L** to cycle
+Files → Now playing → DJ → Files.
 
 - **Files** – a folder browser for the whole card. The header shows the current
   folder (`SD:/Rock/Live`), folders end in `/`, `..` goes up one level, and `>`
   marks the loaded track.
 - **Now playing** – scrolling title and artist/album, progress bar, elapsed/total
-  time, state, track number, volume, repeat/shuffle.
+  time, state, track number, volume, repeat/shuffle. After 3 seconds without a
+  button press while music is playing, it switches to the DJ screen by itself.
+- **DJ** – a live visualiser of the song plus effects and samplers (below).
 
-| Button | Files screen | Now playing screen | Outside the player |
-| --- | --- | --- | --- |
-| Single-click **L** / **R** | Cursor up / down (wraps) | Volume down / up | Volume down / up |
-| Double-click **L** | Go up one folder | Previous track | Previous track |
-| Double-click **R** | Show now playing | Next track | Next track |
-| Single-click **M** | Open folder, go up on `..`, or play the file | Pause / play | Existing chat toggle |
-| Double-click **M** | Stop and exit | Stop and exit | Open the player |
-| Hold **L** | Switch to now playing | Switch to files | Mute |
-| Hold **R** | Maximum volume | Maximum volume | Maximum volume |
-| Hold **M** | Power off on battery, reboot on USB-C | Same | Same |
+| Button | Files | Now playing | DJ | Outside the player |
+| --- | --- | --- | --- | --- |
+| Single **L** / **R** | Cursor up / down | Volume down / up | Sampler pad L / R (on press) | Volume down / up |
+| Double **L** | Go up one folder | Previous track | – | Previous track |
+| Double **R** | Show now playing | Next track | – | Next track |
+| Single **M** | Open folder / `..` / play file | Pause / play | Next effect | Existing chat toggle |
+| Double **M** | Stop and exit | Stop and exit | Stop and exit | Open the player |
+| Hold **L** | Next screen | Next screen | Next screen | Mute |
+| Hold **R** | Maximum volume | Maximum volume | Switch pad bank | Maximum volume |
+| Hold **M** | Power off on battery, reboot on USB-C | Same | Same | Same |
 
-The player opens on the folder of the loaded track (or the card root), and on
-now playing if music is already running. Playing a file switches to now
-playing; playback then continues through the whole library in sorted path
-order, which can cross folders. Previous restarts the current track after three
-seconds of playback; before that it selects the previous track. Repeat, shuffle
-and seeking are available through voice/MCP. Button single-click actions run
-after the double-click detection interval. The screen yields to the
-conversation screen while the assistant is active and returns when it becomes
-idle. Wake-word detection remains available during music.
+Playing a file switches to now playing; playback then continues through the
+whole library in sorted path order, which can cross folders. Previous restarts
+the current track after three seconds of playback; before that it selects the
+previous track. Repeat, shuffle and seeking are available through voice/MCP.
+Button single-click actions run after the double-click detection interval. The
+screen yields to the conversation screen while the assistant is active and
+returns when it becomes idle. Wake-word detection remains available during music.
+
+### DJ screen
+
+The DJ screen is driven by the audio that is actually being played:
+
+- **Waveform** – a scrolling, mirrored level envelope (about 1.2 s of history).
+- **Spectrum** – 12 bands from 60 Hz to 10 kHz.
+- **BPM and beat** – the low bands are tracked for beats; the progress bar flashes
+  red on each beat and the BPM is shown once four beats have been seen
+  (approximate; tracks without a clear pulse may show `--`).
+- **Effect** (single-click **M** cycles): OFF, LPF (low-pass), HPF (high-pass),
+  ECHO (280 ms delay), CRUSH (5-bit, sample-rate reduction) and GATE (8 Hz
+  stutter). The visualiser shows the processed output.
+- **Sampler** – four synthesised one-shots mixed over the song: bank 1 is
+  KICK (L) and SNARE (R), bank 2 is HAT (L) and HORN (R); hold **R** switches
+  bank. Pads fire on button press and flash on screen.
+
+Effects and samplers are applied only while a track is playing, and are not
+applied to voice-assistant audio. Volume and track skipping are on the Now
+playing screen (hold **L** to leave the DJ screen).
 
 ### Voice and MCP controls
 

@@ -9,6 +9,7 @@
 #include <esp_err.h>
 #include <sdmmc_cmd.h>
 
+#include "dj_engine.h"
 #include "mp3_index.h"
 #include "music_playlist.h"
 
@@ -33,6 +34,8 @@ public:
     std::vector<std::string> TrackNames(size_t offset, size_t count);
     // Mount the card and index all MP3 files in the background (no-op once loaded).
     void ScanInBackground();
+    // Effects, sampler and analysis applied to the music stream.
+    box2_music::DjEngine& Dj() { return dj_; }
     bool IsBusy() const { return busy_.load(); }
     bool IsPaused() const { return paused_.load(); }
 
@@ -41,6 +44,7 @@ private:
     std::atomic<bool> busy_{false}, cancelled_{false}, paused_{false};
     std::atomic<uint32_t> revision_{0};
     sdmmc_card_t* card_ = nullptr;
+    box2_music::DjEngine dj_;
     box2_music::Playlist playlist_;
     box2_music::TrackInfo info_;
     bool library_loaded_ = false, truncated_ = false, library_scanning_ = false;
