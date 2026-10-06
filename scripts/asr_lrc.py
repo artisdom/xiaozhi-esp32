@@ -142,11 +142,20 @@ def segment_lines(tokens, zh):
     return lines
 
 
-def read_reference(path):
-    base = os.path.splitext(path)[0]
+def read_reference(path, ref_dir=None):
+    """(lines, trusted): a hand-supplied .txt is trusted; an .lrc may be another song's.
+
+    Looks next to the MP3, then in ref_dir. An .lrc written by this tool is never used as
+    a reference for itself."""
+    name = os.path.splitext(os.path.basename(path))[0]
+    bases = [os.path.splitext(path)[0]] + ([os.path.join(ref_dir, name)] if ref_dir else [])
     for ext in (".txt", ".lrc"):
-        if os.path.exists(base + ext):
+        for base in bases:
+            if not os.path.exists(base + ext):
+                continue
             text = open(base + ext, encoding="utf-8-sig").read()
+            if ext == ".lrc" and "[re:asr_lrc.py]" in text:
+                continue
             lines = []
             for line in text.splitlines():
                 if re.match(r"\s*\[(ti|ar|al|by|re|ve|offset|length|au|la):", line):
@@ -155,8 +164,8 @@ def read_reference(path):
                 if line and not re.fullmatch(r"\[.*\]|\(.*\)", line):
                     lines.append(line)
             if lines:
-                return lines
-    return None
+                return lines, ext == ".txt"
+    return None, False
 
 
 def align_reference(ref_lines, toks, zh, duration):
@@ -185,9 +194,12 @@ def align_reference(ref_lines, toks, zh, duration):
         if start is None:
             if out:
                 break
+            # The first line was not recognised: try the whole recording once.
             start = pos
-        # Only about one verse of recognised words, so a later repeat cannot steal the match.
-        window = toks[start:start + int(len(ref) * 1.15) + 2]
+            window = toks[start:]
+        else:
+            # Only about one verse of recognised words, so a later repeat cannot steal the match.
+            window = toks[start:start + int(len(ref) * 1.15) + 2]
         sm = difflib.SequenceMatcher(None, keys, [t[0] for t in window], autojunk=False)
         blocks = [b for b in sm.get_matching_blocks() if b.size]
         matched = sum(b.size for b in blocks)
@@ -316,6 +328,34 @@ def import_text(args):
             print("no text   ", os.path.basename(path))
 
 
+def estimate_reference(ref_lines, toks, zh):
+    """Spread the reference over the part of the recording where singing was heard.
+
+    Used when the recognised words are too unlike the reference to line them up. The
+    reference is repeated as often as it fits the sung time (about one verse per
+    natural singing time). Times are approximate, so the result is tagged [by:estimated]."""
+    if not toks:
+        return []
+    step = 0.4 if zh else 0.3
+    lines = [tokenize(line, zh) for line in ref_lines]
+    lines = [l for l in lines if l]
+    if not lines:
+        return []
+    start, end = toks[0][1], toks[-1][2]
+    natural = sum(len(l) for l in lines) * step
+    repeats = max(1, round((end - start) / (natural * 1.3)))
+    span = (end - start) / repeats
+    out = []
+    for r in range(repeats):
+        cursor = start + r * span
+        total = sum(len(l) for l in lines)
+        for line in lines:
+            share = span * len(line) / total
+            out.append([(tok, cursor + share * i / len(line)) for i, tok in enumerate(line)])
+            cursor += share
+    return out
+
+
 def fmt(seconds):
     seconds = max(0.0, seconds)
     return "<%02d:%05.2f>" % (int(seconds // 60), seconds % 60)
@@ -352,17 +392,19 @@ def align(args):
         if not toks:
             print("silent   ", name)
             continue
-        ref = read_reference(path)
+        ref, trusted = read_reference(path, args.refs)
         title = os.path.splitext(name)[0]
         if ref:
             lines = align_reference(ref, toks, zh, data["duration"])
             by = "asr-aligned"
-            if not lines:  # Reference does not match the recording: fall back to what was heard.
-                ref = None
-        if not ref:
+            if not lines and trusted:
+                # Too unlike what was recognised to line up. Text you supplied is still
+                # better than mis-heard words, so keep it with approximate times.
+                lines, by = estimate_reference(ref, toks, zh), "estimated"
+        if not ref or not lines:
             lines, by = segment_lines(toks, zh), "asr"
         lrc = os.path.splitext(path)[0] + ".lrc"
-        if os.path.exists(lrc) and not args.force and "[by:asr" in open(lrc, encoding="utf-8").read():
+        if os.path.exists(lrc) and not args.force and "[re:asr_lrc.py]" in open(lrc, encoding="utf-8").read():
             print("keep     ", name)  # Already produced by this tool (possibly proof-read).
             continue
         count = write_lrc(path, lines, zh, by, title)
@@ -385,6 +427,7 @@ def main():
     a = sub.add_parser("align")
     a.add_argument("folders", nargs="+")
     a.add_argument("--asr", required=True)
+    a.add_argument("--refs", help="folder with reference <song>.txt/.lrc files (e.g. from fetch_lrc.py)")
     a.add_argument("--force", action="store_true", help="also redo files made by this tool")
     args = parser.parse_args()
     {"transcribe": transcribe, "align": align, "import-text": import_text}[args.command](args)

@@ -50,6 +50,26 @@ class AsrLrcTest(unittest.TestCase):
         self.assertEqual([[t for t, _ in l] for l in lines],
                          [["alpha", "beta", "gamma"], ["delta", "epsilon", "zeta"]])
 
+    def test_estimate_reference_spreads_text_over_the_sung_part(self):
+        heard = tokens(["x"] * 20, start=10.0, step=1.0)  # Sung from 10 s to about 30 s.
+        lines = asr_lrc.estimate_reference(["alpha beta", "gamma delta"], heard, False)
+        starts = [t for line in lines for _, t in line]
+        self.assertGreaterEqual(min(starts), 10.0)
+        self.assertLess(max(starts), 30.0)
+        self.assertEqual(starts, sorted(starts))
+        self.assertEqual([t for t, _ in lines[0]], ["alpha", "beta"])
+
+    def test_read_reference_trust_and_self_made_lrc(self):
+        with tempfile.TemporaryDirectory() as temp:
+            mp3 = os.path.join(temp, "song.mp3")
+            Path(os.path.join(temp, "song.lrc")).write_text("[ti:x]\n[00:01.00]from lrclib\n", encoding="utf-8")
+            self.assertEqual(asr_lrc.read_reference(mp3), (["from lrclib"], False))
+            Path(os.path.join(temp, "song.txt")).write_text("typed by hand\n", encoding="utf-8")
+            self.assertEqual(asr_lrc.read_reference(mp3), (["typed by hand"], True))
+            os.remove(os.path.join(temp, "song.txt"))
+            Path(os.path.join(temp, "song.lrc")).write_text("[re:asr_lrc.py]\n[00:01.00]own output\n", encoding="utf-8")
+            self.assertEqual(asr_lrc.read_reference(mp3), (None, False))  # Never its own reference.
+
     def test_parse_sections_titles_and_credits(self):
         text = ("[First Song]\nline one\nline two\n\n2. Second\nsecond a\nWords: someone\n"
                 "\nKnownTitle\n\nknown line a\nknown line b\n")
