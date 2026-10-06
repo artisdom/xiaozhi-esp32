@@ -53,6 +53,7 @@ private:
     int dj_cursor_ = 0;  // Selected DJ item: pads first, then effects.
     std::atomic<int64_t> dj_pad_time_us_[box2_music::DjEngine::kPadCount] = {};
     int64_t last_volume_hold_us_ = 0;
+    std::atomic<bool> music_refresh_pending_{false};  // A periodic refresh is queued.
     uint8_t q_idle_level_ = 1;  // IO-expander level of the Q key while released.
     uint32_t dj_last_frames_ = 0, dj_last_beats_ = 0;
     int dj_idle_ticks_ = 0, dj_beat_ticks_ = 0;
@@ -79,9 +80,14 @@ private:
                     atk_dnesp32s3_box2_wifi* self = static_cast<atk_dnesp32s3_box2_wifi*>(arg);
 
                     self->ticks_++;
-                    // The DJ screen animates at 10 fps; the other screens refresh once a second.
-                    if (self->ticks_ % 10 == 0 ||
-                        (self->music_view_ && self->music_screen_ == MusicScreen::Dj)) {
+                    // The DJ screen animates at 5 fps, the other screens refresh once a
+                    // second. Never queue a refresh while the last one is still waiting: a
+                    // redraw can take longer than the tick, and a backlog in the main loop
+                    // delays button handling by many seconds.
+                    if ((self->ticks_ % 10 == 0 ||
+                         (self->music_view_ && self->music_screen_ == MusicScreen::Dj &&
+                          self->ticks_ % 2 == 0)) &&
+                        !self->music_refresh_pending_.exchange(true)) {
                         Application::GetInstance().Schedule([self]() {
                             auto state = self->music_player_.Snapshot();
                             self->AutoEnterDj(state);
@@ -93,6 +99,7 @@ private:
                                 idle && (self->music_view_ || state.phase == "playing" ||
                                          state.phase == "indexing" || state.phase == "waiting" ||
                                          state.phase == "paused"));
+                            self->music_refresh_pending_.store(false);
                         });
                     }
                     if (self->ticks_ % self->kChgCtrlInterval == 0) {
