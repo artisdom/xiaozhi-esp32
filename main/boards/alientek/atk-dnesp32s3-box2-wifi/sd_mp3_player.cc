@@ -81,7 +81,9 @@ esp_err_t SdMp3Player::Mount() {
     if (ret != ESP_OK) {
         card_ = nullptr;
         spi_bus_free(SD_SPI_HOST);
-        ESP_LOGW(kTag, "SD mount failed: %s", esp_err_to_name(ret));
+        ESP_LOGW(kTag, "SD mount failed: %s%s", esp_err_to_name(ret),
+                 ret == ESP_FAIL ? " (card has no FAT12/16/32 filesystem; exFAT is not supported)"
+                                 : "");
     } else {
         ESP_LOGI(kTag, "SD card mounted: %s, %llu MB", card_->cid.name,
                  (unsigned long long)card_->csd.capacity * card_->csd.sector_size / (1024 * 1024));
@@ -99,7 +101,9 @@ std::expected<void, std::string> SdMp3Player::LoadLibrary(bool refresh) {
     }
     auto ret = Mount();
     if (ret != ESP_OK)
-        return std::unexpected(std::string("SD card unavailable: ") + esp_err_to_name(ret));
+        return std::unexpected(ret == ESP_FAIL ? "SD card must be FAT32 (exFAT unsupported)"
+                                               : std::string("SD card unavailable: ") +
+                                                     esp_err_to_name(ret));
     std::lock_guard<std::mutex> storage_lock(storage_mutex_);
     std::vector<std::string> tracks;
     tracks.reserve(box2_music::Playlist::kCapacity);
