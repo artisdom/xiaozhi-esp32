@@ -32,28 +32,35 @@ automatically.
 
 ### Music player screen and buttons
 
-Double-click **M** to open the player. The 240×320 screen shows the scrolling
-title and artist/album, a progress bar, elapsed/total time, playback state,
-track number and volume, then a track browser with a highlighted cursor (`>`
-marks the loaded track). The first browser row is the play mode (repeat
-off/all/one and shuffle). The screen yields to the conversation screen while the
-assistant is active and returns when it becomes idle.
+Double-click **M** to open the player. It has two screens, switched by holding
+**L**:
 
-| Button | In the player | Elsewhere |
-| --- | --- | --- |
-| Double-click **M** | Stop and return to chat | Open the player |
-| Single-click **M** | Play the highlighted track, pause/resume if it is already loaded, or cycle the mode on the mode row | Existing chat toggle |
-| Single-click **L/R** | Move the cursor up/down (wraps) | Volume down/up |
-| Double-click **L/R** | Previous/next track | Previous/next track |
-| Long-press/hold **L/R** | Volume down/up (repeats while held) | Mute / maximum volume |
-| Long-press **M** | Power off on battery, reboot on USB-C | Same |
+- **Files** – a folder browser for the whole card. The header shows the current
+  folder (`SD:/Rock/Live`), folders end in `/`, `..` goes up one level, and `>`
+  marks the loaded track.
+- **Now playing** – scrolling title and artist/album, progress bar, elapsed/total
+  time, state, track number, volume, repeat/shuffle.
 
-The mode row cycles: repeat off, repeat all, repeat one, shuffle (repeat all),
-then back to off. Previous restarts the current track after three seconds of
-playback; before that it selects the previous track. Manual navigation wraps at
-the ends. Button single-click actions run after the double-click detection
-interval. Wake-word detection remains available during music. Seeking is
-available through voice/MCP.
+| Button | Files screen | Now playing screen | Outside the player |
+| --- | --- | --- | --- |
+| Single-click **L** / **R** | Cursor up / down (wraps) | Volume down / up | Volume down / up |
+| Double-click **L** | Go up one folder | Previous track | Previous track |
+| Double-click **R** | Show now playing | Next track | Next track |
+| Single-click **M** | Open folder, go up on `..`, or play the file | Pause / play | Existing chat toggle |
+| Double-click **M** | Stop and exit | Stop and exit | Open the player |
+| Hold **L** | Switch to now playing | Switch to files | Mute |
+| Hold **R** | Maximum volume | Maximum volume | Maximum volume |
+| Hold **M** | Power off on battery, reboot on USB-C | Same | Same |
+
+The player opens on the folder of the loaded track (or the card root), and on
+now playing if music is already running. Playing a file switches to now
+playing; playback then continues through the whole library in sorted path
+order, which can cross folders. Previous restarts the current track after three
+seconds of playback; before that it selects the previous track. Repeat, shuffle
+and seeking are available through voice/MCP. Button single-click actions run
+after the double-click detection interval. The screen yields to the
+conversation screen while the assistant is active and returns when it becomes
+idle. Wake-word detection remains available during music.
 
 ### Voice and MCP controls
 

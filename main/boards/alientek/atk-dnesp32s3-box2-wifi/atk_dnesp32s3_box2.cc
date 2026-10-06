@@ -22,6 +22,7 @@
 #include <esp_system.h>
 #include <esp_timer.h>
 #include "mp3_utils.h"
+#include "music_browser.h"
 #include <algorithm>
 #include <vector>
 
@@ -45,8 +46,12 @@ private:
     const int kChgCtrlInterval = 5;
     SdMp3Player music_player_;
     bool music_view_ = false;
-    size_t music_cursor_ = 0;       // Row 0 is the play-mode row; track i is row i + 1.
-    int64_t last_volume_hold_us_ = 0;
+    bool music_browsing_ = true;  // Player screen: folder browser (true) or now playing.
+    std::string music_dir_;       // Folder shown in the browser, relative to the card root.
+    std::vector<box2_music::BrowseEntry> browse_;
+    size_t browse_cursor_ = 0;
+    size_t browse_top_ = 0;  // First visible browser row.
+    size_t browse_total_ = static_cast<size_t>(-1);  // Library size browse_ was built for.
 
     void InitializeBoardPowerManager() {
         instance_ = this;
@@ -221,82 +226,127 @@ private:
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
     }
 
-    // Rows of the music browser around the cursor, for MusicDisplay.
-    std::vector<MusicListRow> BuildMusicRows(const MusicSnapshot& state) {
-        std::vector<MusicListRow> rows;
-        if (!state.total)
-            return rows;
-        const size_t total_rows = state.total + 1;
-        music_cursor_ = std::min(music_cursor_, total_rows - 1);
-        const size_t window = MusicDisplay::kListRows;
-        size_t top = music_cursor_ > window / 2 ? music_cursor_ - window / 2 : 0;
-        top = std::min(top, total_rows > window ? total_rows - window : 0);
-        auto names = music_player_.TrackNames(top > 0 ? top - 1 : 0, window);
-        for (size_t row = top; row < std::min(total_rows, top + window); ++row) {
-            MusicListRow item;
-            item.selected = row == music_cursor_;
-            if (row == 0) {
-                item.text = "Mode: Repeat " + state.repeat + (state.shuffle ? ", shuffle" : "");
-            } else {
-                size_t offset = row - 1 - (top > 0 ? top - 1 : 0);
-                if (offset >= names.size())
-                    break;
-                item.text = box2_music::TrackLabel(names[offset]);
-                item.playing = names[offset] == state.filename;
-            }
-            rows.push_back(std::move(item));
+    // Rebuild the folder listing; keep the cursor on `select_path` when it is present.
+    void RebuildBrowse(const std::string& select_path = "") {
+        auto state = music_player_.Snapshot();
+        browse_ = box2_music::ListDirectory(music_player_.TrackNames(0, state.total), music_dir_);
+        browse_total_ = state.total;
+        browse_cursor_ = browse_top_ = 0;
+        for (size_t i = 0; i < browse_.size(); ++i)
+            if (!select_path.empty() && browse_[i].path == select_path)
+                browse_cursor_ = i;
+        // A folder can disappear after a library refresh; fall back towards the root.
+        if (browse_.empty() || (browse_.size() == 1 && !music_dir_.empty() && !state.total)) {
+            music_dir_.clear();
+            browse_ = box2_music::ListDirectory(music_player_.TrackNames(0, state.total), "");
         }
-        return rows;
+    }
+
+    MusicBrowseView BuildBrowseView(const MusicSnapshot& state) {
+        MusicBrowseView view;
+        view.browsing = music_browsing_;
+        view.path = music_dir_;
+        if (!music_browsing_)
+            return view;
+        if (state.total != browse_total_)
+            RebuildBrowse();
+        const size_t window = display_->VisibleListRows();
+        browse_cursor_ = std::min(browse_cursor_, browse_.empty() ? 0 : browse_.size() - 1);
+        if (browse_cursor_ < browse_top_)
+            browse_top_ = browse_cursor_;
+        else if (browse_cursor_ >= browse_top_ + window)
+            browse_top_ = browse_cursor_ - window + 1;
+        for (size_t i = browse_top_; i < std::min(browse_.size(), browse_top_ + window); ++i) {
+            MusicListRow row;
+            const auto& entry = browse_[i];
+            row.text = entry.kind == box2_music::BrowseEntry::Kind::File ? entry.name
+                                                                         : entry.name + "/";
+            row.selected = i == browse_cursor_;
+            row.playing = entry.kind == box2_music::BrowseEntry::Kind::File &&
+                          entry.path == state.filename;
+            view.rows.push_back(std::move(row));
+        }
+        return view;
     }
 
     void RefreshMusicView(bool visible) {
         auto state = music_player_.Snapshot();
         display_->UpdateMusic(state, visible, GetAudioCodec()->output_volume(),
-                              visible ? BuildMusicRows(state) : std::vector<MusicListRow>());
+                              visible ? BuildBrowseView(state) : MusicBrowseView());
     }
 
-    void MoveMusicCursor(int direction) {
+    // Open the player: browse the folder of the current track, or show now playing if busy.
+    void OpenMusicView() {
+        music_view_ = true;
+        music_player_.ScanInBackground();
         auto state = music_player_.Snapshot();
-        size_t total_rows = state.total + 1;
-        music_cursor_ = (music_cursor_ + total_rows + direction) % total_rows;
+        music_browsing_ = !(state.busy || state.phase == "paused");
+        music_dir_ = box2_music::ParentDirectory(state.filename);
+        RebuildBrowse(state.filename);
         RefreshMusicView(true);
     }
 
-    void SyncMusicCursorToPlaying() {
-        auto state = music_player_.Snapshot();
-        music_cursor_ = state.total ? state.index + 1 : 0;
+    void CloseMusicView() {
+        music_player_.Stop();
+        music_view_ = false;
+        RefreshMusicView(false);
     }
 
-    void CycleMusicMode() {
-        auto state = music_player_.Snapshot();
-        using box2_music::Repeat;
-        // off -> repeat all -> repeat one -> shuffle (repeat all) -> off
-        if (state.shuffle)
-            music_player_.SetMode(Repeat::Off, false);
-        else if (state.repeat == "off")
-            music_player_.SetMode(Repeat::All, false);
-        else if (state.repeat == "all")
-            music_player_.SetMode(Repeat::One, false);
-        else
-            music_player_.SetMode(Repeat::All, true);
+    void ToggleMusicScreen() {
+        music_browsing_ = !music_browsing_;
+        if (music_browsing_) {
+            auto state = music_player_.Snapshot();
+            music_dir_ = box2_music::ParentDirectory(state.filename);
+            RebuildBrowse(state.filename);
+        }
+        RefreshMusicView(true);
     }
 
-    // M pressed in the music screen: act on the highlighted row.
-    void ActivateMusicRow() {
-        auto state = music_player_.Snapshot();
-        if (music_cursor_ == 0 && state.total) {
-            CycleMusicMode();
+    void MoveBrowseCursor(int direction) {
+        if (browse_.empty())
+            return;
+        browse_cursor_ = (browse_cursor_ + browse_.size() + direction) % browse_.size();
+        RefreshMusicView(true);
+    }
+
+    void EnterMusicFolder(const std::string& dir, const std::string& select_path = "") {
+        music_dir_ = dir;
+        RebuildBrowse(select_path);
+        RefreshMusicView(true);
+    }
+
+    void BrowseUp() {
+        if (!music_dir_.empty())
+            EnterMusicFolder(box2_music::ParentDirectory(music_dir_), music_dir_);
+    }
+
+    // M in the browser: open a folder, go up, or play the highlighted file.
+    void ActivateBrowseEntry() {
+        if (browse_.empty())
+            return;
+        auto entry = browse_[std::min(browse_cursor_, browse_.size() - 1)];
+        using Kind = box2_music::BrowseEntry::Kind;
+        if (entry.kind == Kind::Up) {
+            BrowseUp();
+        } else if (entry.kind == Kind::Folder) {
+            EnterMusicFolder(entry.path);
         } else {
-            auto names = music_player_.TrackNames(music_cursor_ ? music_cursor_ - 1 : 0, 1);
-            bool playing = state.phase == "playing" || state.phase == "waiting" ||
-                           state.phase == "indexing";
-            std::expected<std::string, std::string> result = std::string();
-            if (!names.empty() && names[0] != state.filename)
-                result = music_player_.Start(names[0]);
-            else if (playing)
-                music_player_.Pause();
+            auto result = music_player_.Start(entry.path);
+            if (!result)
+                GetDisplay()->ShowNotification(result.error());
             else
-                result = state.filename.empty() ? music_player_.Start() : music_player_.Resume();
+                music_browsing_ = false;
+            RefreshMusicView(true);
+        }
+    }
+
+    // M on the now-playing screen: pause when playing, otherwise play/resume.
+    void TogglePlayPause() {
+        auto state = music_player_.Snapshot();
+        if (state.phase == "playing" || state.phase == "waiting" || state.phase == "indexing") {
+            music_player_.Pause();
+        } else {
+            auto result = state.filename.empty() ? music_player_.Start() : music_player_.Resume();
             if (!result)
                 GetDisplay()->ShowNotification(result.error());
         }
@@ -306,11 +356,12 @@ private:
     void SkipMusic(int direction) {
         Application::GetInstance().Schedule([this, direction]() {
             power_save_timer_->WakeUp();
+            if (!music_view_)
+                music_browsing_ = false;
             music_view_ = true;
             auto result = music_player_.Skip(direction);
             if (!result)
                 GetDisplay()->ShowNotification(result.error());
-            SyncMusicCursorToPlaying();
             RefreshMusicView(true);
         });
     }
@@ -356,8 +407,8 @@ private:
             [](void* button_handle, void* usr_data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
                 self->power_save_timer_->WakeUp();
-                if (self->music_view_)
-                    Application::GetInstance().Schedule([self]() { self->MoveMusicCursor(-1); });
+                if (self->music_view_ && self->music_browsing_)
+                    Application::GetInstance().Schedule([self]() { self->MoveBrowseCursor(-1); });
                 else
                     self->audio_volume_change(false);
             },
@@ -369,7 +420,7 @@ private:
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
                 self->power_save_timer_->WakeUp();
                 if (self->music_view_)
-                    self->audio_volume_change(false);
+                    Application::GetInstance().Schedule([self]() { self->ToggleMusicScreen(); });
                 else
                     self->audio_volume_minimum();
             },
@@ -383,11 +434,12 @@ private:
                     self->power_save_timer_->WakeUp();
                     auto state = self->music_player_.Snapshot();
                     if (self->music_view_) {
-                        self->ActivateMusicRow();
+                        if (self->music_browsing_)
+                            self->ActivateBrowseEntry();
+                        else
+                            self->TogglePlayPause();
                     } else if (state.busy || state.phase == "paused") {
-                        self->music_view_ = true;
-                        self->SyncMusicCursorToPlaying();
-                        self->RefreshMusicView(true);
+                        self->OpenMusicView();
                     } else
                         Application::GetInstance().ToggleChatState();
                 });
@@ -402,15 +454,9 @@ private:
                     self->power_save_timer_->WakeUp();
                     auto state = self->music_player_.Snapshot();
                     if (self->music_view_ || state.busy || state.phase == "paused") {
-                        self->music_player_.Stop();
-                        self->music_view_ = false;
-                        self->RefreshMusicView(false);
+                        self->CloseMusicView();
                     } else {
-                        // Open the player screen; playback starts from the highlighted row.
-                        self->music_view_ = true;
-                        self->music_player_.ScanInBackground();
-                        self->SyncMusicCursorToPlaying();
-                        self->RefreshMusicView(true);
+                        self->OpenMusicView();
                     }
                 });
             },
@@ -420,14 +466,20 @@ private:
             l_btn_handle, BUTTON_DOUBLE_CLICK, nullptr,
             [](void*, void* data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(data);
-                self->SkipMusic(-1);
+                if (self->music_view_ && self->music_browsing_)
+                    Application::GetInstance().Schedule([self]() { self->BrowseUp(); });
+                else
+                    self->SkipMusic(-1);
             },
             this);
         iot_button_register_cb(
             r_btn_handle, BUTTON_DOUBLE_CLICK, nullptr,
             [](void*, void* data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(data);
-                self->SkipMusic(1);
+                if (self->music_view_ && self->music_browsing_)
+                    Application::GetInstance().Schedule([self]() { self->ToggleMusicScreen(); });
+                else
+                    self->SkipMusic(1);
             },
             this);
 
@@ -463,8 +515,8 @@ private:
             [](void* button_handle, void* usr_data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
                 self->power_save_timer_->WakeUp();
-                if (self->music_view_)
-                    Application::GetInstance().Schedule([self]() { self->MoveMusicCursor(1); });
+                if (self->music_view_ && self->music_browsing_)
+                    Application::GetInstance().Schedule([self]() { self->MoveBrowseCursor(1); });
                 else
                     self->audio_volume_change(true);
             },
@@ -475,34 +527,9 @@ private:
             [](void* button_handle, void* usr_data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
                 self->power_save_timer_->WakeUp();
-                if (self->music_view_)
-                    self->audio_volume_change(true);
-                else
-                    self->audio_volume_maxmum();
+                self->audio_volume_maxmum();
             },
             this);
-        RegisterVolumeHold(l_btn_handle, false);
-        RegisterVolumeHold(r_btn_handle, true);
-    }
-
-    // Holding L/R in the music screen keeps stepping the volume.
-    void RegisterVolumeHold(button_handle_t handle, bool up) {
-        struct Context {
-            atk_dnesp32s3_box2_wifi* self;
-            bool up;
-        };
-        iot_button_register_cb(
-            handle, BUTTON_LONG_PRESS_HOLD, nullptr,
-            [](void*, void* data) {
-                auto* ctx = static_cast<Context*>(data);
-                auto* self = ctx->self;
-                int64_t now = esp_timer_get_time();
-                if (!self->music_view_ || now - self->last_volume_hold_us_ < 250000)
-                    return;
-                self->last_volume_hold_us_ = now;
-                self->audio_volume_change(ctx->up);
-            },
-            new Context{this, up});  // Lives as long as the board.
     }
 
     void InitializeSt7789Display() {

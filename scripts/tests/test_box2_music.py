@@ -62,6 +62,33 @@ class Box2MusicTest(unittest.TestCase):
                             "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
+    def test_folder_browser_listing(self):
+        self.compile_and_run(r'''
+            #include <cassert>
+            #include "music_browser.h"
+            int main() {
+                using namespace box2_music;
+                std::vector<std::string> tracks = {"Rock/Live/b.mp3", "Rock/a.mp3", "Rock/z.mp3",
+                                                   "Jazz/x.mp3", "root.mp3", "Rock-2/q.mp3"};
+                auto root = ListDirectory(tracks, "");
+                assert(root.size() == 4);  // Jazz/, Rock/, Rock-2/, root
+                assert(root[0].kind == BrowseEntry::Kind::Folder && root[0].name == "Jazz");
+                assert(root[1].name == "Rock" && root[1].path == "Rock");
+                assert(root[2].name == "Rock-2");
+                assert(root[3].kind == BrowseEntry::Kind::File && root[3].name == "root" &&
+                       root[3].path == "root.mp3");
+                auto rock = ListDirectory(tracks, "Rock");
+                assert(rock.size() == 4);  // .., Live/, a, z
+                assert(rock[0].kind == BrowseEntry::Kind::Up && rock[0].path.empty());
+                assert(rock[1].name == "Live" && rock[1].path == "Rock/Live");
+                assert(rock[2].path == "Rock/a.mp3" && rock[3].name == "z");
+                auto live = ListDirectory(tracks, "Rock/Live");
+                assert(live.size() == 2 && live[0].path == "Rock");
+                assert(ParentDirectory("Rock/Live") == "Rock" && ParentDirectory("Rock").empty());
+                assert(ListDirectory(tracks, "Missing").size() == 1);  // Only "..".
+            }
+        ''')
+
     def test_playlist_navigation_repeat_shuffle_and_refresh(self):
         self.compile_and_run(r'''
             #include <cassert>
