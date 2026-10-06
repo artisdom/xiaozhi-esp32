@@ -13,14 +13,15 @@
 #include <memory>
 #include <new>
 
+#include <esp_random.h>
 #include "application.h"
 #include "config.h"
 #include "display.h"
 #include "esp_ae_rate_cvt.h"
-#include "esp_audio_simple_dec.h"
 #include "esp_mp3_dec.h"
 #include "mcp_server.h"
 #include "mp3_utils.h"
+#include "settings.h"
 
 namespace {
 constexpr const char* kTag = "Box2Music";
@@ -29,21 +30,21 @@ constexpr const char* kMusicDir = "/sdcard/MUSIC";
 constexpr int kMaxDirectoryEntries = 4096;
 
 struct DecodeBuffers {
-    std::array<uint8_t, 1024> input;
+    std::array<uint8_t, 1441> input;    // Largest supported Layer III frame.
     std::array<int16_t, 2304> decoded;  // One maximum-size stereo MP3 frame.
     std::array<int16_t, 1152> mono;
     std::array<int16_t, 4608> resampled;  // 8 kHz -> 24 kHz, plus filter headroom.
 };
 
 struct DecoderResources {
-    esp_audio_simple_dec_handle_t decoder = nullptr;
+    void* decoder = nullptr;
     esp_ae_rate_cvt_handle_t resampler = nullptr;
     ~DecoderResources() {
         if (resampler) {
             esp_ae_rate_cvt_close(resampler);
         }
         if (decoder) {
-            esp_audio_simple_dec_close(decoder);
+            esp_mp3_dec_close(decoder);
         }
     }
 };
@@ -84,122 +85,130 @@ esp_err_t SdMp3Player::Mount() {
     return ret;
 }
 
-std::expected<std::vector<std::string>, std::string> SdMp3Player::ListTracks(int offset,
-                                                                             int limit) {
+std::expected<void, std::string> SdMp3Player::LoadLibrary(bool refresh) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (library_loaded_ && !refresh)
+            return {};
+        if (refresh && busy_.load())
+            return std::unexpected("Stop playback before refreshing the library");
+    }
     auto ret = Mount();
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
         return std::unexpected(std::string("SD card unavailable: ") + esp_err_to_name(ret));
-    }
-    std::lock_guard<std::mutex> lock(storage_mutex_);
+    std::lock_guard<std::mutex> storage_lock(storage_mutex_);
     std::unique_ptr<DIR, decltype(&closedir)> dir(opendir(kMusicDir), closedir);
-    if (!dir) {
+    if (!dir)
         return std::unexpected("Cannot open MUSIC directory on SD card");
-    }
     std::vector<std::string> tracks;
-    tracks.reserve(limit);
-    int index = 0;
+    tracks.reserve(box2_music::Playlist::kCapacity);
     int scanned = 0;
+    bool truncated = false;
     while (auto* entry = readdir(dir.get())) {
         if (++scanned > kMaxDirectoryEntries) {
+            truncated = true;
             break;
         }
-        if (!box2_music::IsMp3Filename(entry->d_name)) {
+        if (!box2_music::IsMp3Filename(entry->d_name))
             continue;
-        }
-        struct stat info = {};
+        struct stat st = {};
         auto path = std::string(kMusicDir) + "/" + entry->d_name;
-        if (stat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode)) {
+        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
             continue;
-        }
-        if (index++ < offset) {
-            continue;
+        if (tracks.size() == box2_music::Playlist::kCapacity) {
+            truncated = true;
+            break;
         }
         tracks.emplace_back(entry->d_name);
-        if (tracks.size() == static_cast<size_t>(limit)) {
-            break;
-        }
-    }
-    return tracks;
-}
-
-void SdMp3Player::InitializeTools() {
-    auto& mcp = McpServer::GetInstance();
-    mcp.AddTool("self.music.list",
-                "List MP3 filenames in the SD card MUSIC folder. Use exact "
-                "filenames with self.music.play. Directory order; at most 4096 entries scanned.",
-                PropertyList({Property("offset", kPropertyTypeInteger, 0, 0, 4096),
-                              Property("limit", kPropertyTypeInteger, 20, 1, 64)}),
-                [this](const PropertyList& p) -> ToolResult {
-                    auto tracks = ListTracks(p["offset"].value<int>(), p["limit"].value<int>());
-                    if (!tracks) {
-                        return std::unexpected(tracks.error());
-                    }
-                    CJsonUniquePtr result(cJSON_CreateObject());
-                    CJsonUniquePtr files(cJSON_CreateArray());
-                    if (!result || !files) {
-                        return std::unexpected("Out of memory");
-                    }
-                    for (const auto& track : *tracks) {
-                        CJsonUniquePtr item(cJSON_CreateString(track.c_str()));
-                        if (!item || !cJSON_AddItemToArray(files.get(), item.get())) {
-                            return std::unexpected("Out of memory");
-                        }
-                        item.release();
-                    }
-                    cJSON_AddNumberToObject(result.get(), "next_offset",
-                                            p["offset"].value<int>() + tracks->size());
-                    if (!cJSON_AddItemToObject(result.get(), "files", files.get())) {
-                        return std::unexpected("Out of memory");
-                    }
-                    files.release();
-                    return result.release();
-                });
-    mcp.AddTool(
-        "self.music.play",
-        "Play one MP3 from the SD card MUSIC folder. filename is an "
-        "exact basename from self.music.list, or empty to play the first track. Playback "
-        "starts after the spoken reply, ends conversation listening, and is interrupted "
-        "by wake word, chat or other audio. Stop current music before choosing another.",
-        PropertyList({Property("filename", kPropertyTypeString, std::string()).SetMaxLength(255)}),
-        [this](const PropertyList& p) -> ToolResult {
-            auto result = Start(p["filename"].value<std::string>());
-            if (!result) {
-                return std::unexpected(result.error());
-            }
-            return *result;
-        });
-    mcp.AddTool("self.music.stop", "Stop SD-card music or cancel a pending music request.",
-                PropertyList(), [this](const PropertyList&) -> ReturnValue {
-                    Stop();
-                    return true;
-                });
-    mcp.AddTool("self.music.status", "Get SD-card music phase, filename and last error.",
-                PropertyList(), [this](const PropertyList&) -> ToolResult {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    CJsonUniquePtr result(cJSON_CreateObject());
-                    if (!result) {
-                        return std::unexpected("Out of memory");
-                    }
-                    cJSON_AddBoolToObject(result.get(), "busy", busy_.load());
-                    cJSON_AddStringToObject(result.get(), "phase", phase_.c_str());
-                    cJSON_AddStringToObject(result.get(), "filename", filename_.c_str());
-                    cJSON_AddStringToObject(result.get(), "error", error_.c_str());
-                    return result.release();
-                });
-}
-
-std::expected<std::string, std::string> SdMp3Player::Start(std::string filename) {
-    if (!filename.empty() && !box2_music::IsMp3Filename(filename)) {
-        return std::unexpected("Expected an MP3 basename in MUSIC (no paths)");
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (busy_.load()) {
-        return std::unexpected("Music is busy; stop it before starting another track");
+    if (refresh && busy_.load())
+        return std::unexpected("Playback started during refresh; stop and retry");
+    if (library_loaded_ && !refresh)
+        return {};
+    playlist_.SetTracks(std::move(tracks));
+    if (refresh)
+        info_ = {};  // Files may have been replaced even when their names are unchanged.
+    if (refresh && !filename_.empty() && !playlist_.Select(filename_)) {
+        filename_ = playlist_.Current();
+        info_ = {};
+        target_ms_ = position_ms_ = 0;
+        paused_.store(false);
+        phase_ = "stopped";
     }
-    filename_ = std::move(filename);
-    error_.clear();
-    phase_ = "waiting";
-    cancelled_.store(false);
+    library_loaded_ = true;
+    truncated_ = truncated;
+    return {};
+}
+
+std::expected<bool, std::string> SdMp3Player::QueueLibraryScan(bool refresh) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (library_scanning_)
+        return true;
+    if (library_loaded_ && !refresh)
+        return false;
+    if (refresh && busy_.load())
+        return std::unexpected("Stop playback before refreshing the library");
+    library_scanning_ = true;
+    library_refresh_ = refresh;
+    // Mounting and scanning can take seconds on a card; MCP runs on the main task.
+    if (xTaskCreate(
+            [](void* arg) {
+                auto* self = static_cast<SdMp3Player*>(arg);
+                bool refresh;
+                {
+                    std::lock_guard<std::mutex> lock(self->mutex_);
+                    refresh = self->library_refresh_;
+                }
+                {
+                    auto result = self->LoadLibrary(refresh);
+                    std::lock_guard<std::mutex> lock(self->mutex_);
+                    self->library_scanning_ = false;
+                    if (!self->busy_.load()) {
+                        if (!result) {
+                            self->error_ = result.error();
+                            self->phase_ = "error";
+                        } else if (self->phase_ == "error") {
+                            self->error_.clear();
+                            self->phase_ = "stopped";
+                        }
+                    }
+                }  // Release the result's string before deleting this FreeRTOS task.
+                vTaskDelete(nullptr);
+            },
+            "sd_library", 8 * 1024, this, 2, nullptr) != pdPASS) {
+        library_scanning_ = false;
+        return std::unexpected("Cannot allocate SD library task");
+    }
+    return true;
+}
+
+MusicSnapshot SdMp3Player::Snapshot() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    MusicSnapshot s;
+    s.phase = phase_;
+    s.library_scanning = library_scanning_;
+    s.filename = filename_;
+    s.title = info_.title.empty() ? filename_ : info_.title;
+    s.artist = info_.artist;
+    s.album = info_.album;
+    s.error = error_;
+    s.position_ms = position_ms_;
+    s.duration_ms = info_.duration_ms;
+    s.sample_rate = info_.sample_rate;
+    s.bitrate = info_.bitrate;
+    s.index = playlist_.Index();
+    s.total = playlist_.Tracks().size();
+    s.truncated = truncated_;
+    s.repeat = box2_music::RepeatName(playlist_.GetRepeat());
+    s.shuffle = playlist_.Shuffle();
+    s.busy = busy_.load();
+    return s;
+}
+
+std::expected<void, std::string> SdMp3Player::LaunchLocked() {
+    if (busy_.load())
+        return {};
     busy_.store(true);
     if (xTaskCreate(
             [](void* arg) {
@@ -212,256 +221,550 @@ std::expected<std::string, std::string> SdMp3Player::Start(std::string filename)
         error_ = "Cannot allocate MP3 task";
         return std::unexpected(error_);
     }
-    return "Music request queued";
+    return {};
 }
-
-void SdMp3Player::Stop() { cancelled_.store(true); }
-
-void SdMp3Player::SetPhase(const char* phase) {
+std::expected<std::string, std::string> SdMp3Player::Start(std::string filename) {
+    if (!filename.empty() && !box2_music::IsMp3Filename(filename))
+        return std::unexpected("Expected an MP3 basename in MUSIC (no paths)");
     std::lock_guard<std::mutex> lock(mutex_);
-    phase_ = phase;
-}
-
-bool SdMp3Player::ShouldStop() const {
-    return cancelled_.load() || Application::GetInstance().GetDeviceState() != kDeviceStateIdle;
-}
-
-void SdMp3Player::Worker() {
-    std::string filename;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        filename = filename_;
+    if (!filename.empty() && library_loaded_ && !playlist_.Select(filename))
+        return std::unexpected("Track not in library; refresh MUSIC first");
+    if (!filename.empty()) {
+        if (filename_ != filename)
+            info_ = {};
+        filename_ = std::move(filename);
+    } else if (filename_.empty()) {
+        info_ = {};
+        filename_ = playlist_.Current();
     }
-    std::expected<void, std::string> result;
-    uint32_t token = 0;
+    target_ms_ = position_ms_ = 0;
+    paused_.store(false);
+    cancelled_.store(false);
+    error_.clear();
+    phase_ = "waiting";
+    ++revision_;
+    auto result = LaunchLocked();
+    if (!result)
+        return std::unexpected(result.error());
+    return "Playback queued";
+}
+std::expected<std::string, std::string> SdMp3Player::Resume() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (filename_.empty())
+        return std::unexpected("No selected track; use play first");
+    if (info_.duration_ms && position_ms_ >= info_.duration_ms)
+        position_ms_ = 0;
+    target_ms_ = position_ms_;
+    paused_.store(false);
+    cancelled_.store(false);
+    phase_ = "waiting";
+    error_.clear();
+    ++revision_;
+    auto result = LaunchLocked();
+    if (!result)
+        return std::unexpected(result.error());
+    return "Resume queued";
+}
+void SdMp3Player::Pause() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (filename_.empty())
+        return;
+    paused_.store(true);
+    target_ms_ = position_ms_;
+    phase_ = "paused";
+    ++revision_;
+}
+void SdMp3Player::Stop() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    cancelled_.store(true);
+    paused_.store(false);
+    target_ms_ = position_ms_ = 0;
+    phase_ = "stopped";
+    ++revision_;
+}
+std::expected<std::string, std::string> SdMp3Player::Skip(int direction) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (playlist_.Tracks().empty())
+        return std::unexpected("Library empty; list or play music first");
+    if (direction > 0 || position_ms_ <= 3000)
+        playlist_.Advance(direction, true);
+    if (filename_ != playlist_.Current())
+        info_ = {};
+    filename_ = playlist_.Current();
+    target_ms_ = position_ms_ = 0;
+    paused_.store(false);
+    cancelled_.store(false);
+    error_.clear();
+    phase_ = "waiting";
+    ++revision_;
+    auto result = LaunchLocked();
+    if (!result)
+        return std::unexpected(result.error());
+    return "Track change queued";
+}
+std::expected<std::string, std::string> SdMp3Player::Seek(uint32_t milliseconds) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (filename_.empty() || !info_.duration_ms)
+        return std::unexpected("Select and index a track before seeking");
+    target_ms_ = position_ms_ = std::min(milliseconds, info_.duration_ms);
+    ++revision_;
+    cancelled_.store(false);
+    phase_ = paused_.load() ? "paused" : "waiting";
+    if (!paused_.load()) {
+        auto result = LaunchLocked();
+        if (!result)
+            return std::unexpected(result.error());
+    }
+    return "Seek queued";
+}
+void SdMp3Player::SetMode(box2_music::Repeat repeat, bool shuffle) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    playlist_.SetRepeat(repeat);
+    if (playlist_.Shuffle() != shuffle)
+        playlist_.SetShuffle(shuffle, esp_random());
+    Settings settings("box2_music", true);
+    settings.SetString("repeat", box2_music::RepeatName(repeat));
+    settings.SetBool("shuffle", shuffle);
+}
+
+void SdMp3Player::InitializeTools() {
+    {
+        Settings settings("box2_music");
+        auto repeat = settings.GetString("repeat", "off");
+        playlist_.SetRepeat(repeat == "all" ? box2_music::Repeat::All
+                                            : (repeat == "one" ? box2_music::Repeat::One
+                                                               : box2_music::Repeat::Off));
+        playlist_.SetShuffle(settings.GetBool("shuffle", false), esp_random());
+    }
+    auto& mcp = McpServer::GetInstance();
+    mcp.AddTool(
+        "self.music.list",
+        "List sorted MP3 filenames in SD card MUSIC. Supports filename search "
+        "and pagination. First scan or refresh is asynchronous: if scanning=true, call again with "
+        "refresh=false until ready. Refresh only while stopped; library capped at 512 tracks.",
+        PropertyList({Property("offset", kPropertyTypeInteger, 0, 0, 512),
+                      Property("limit", kPropertyTypeInteger, 20, 1, 64),
+                      Property("query", kPropertyTypeString, std::string()).SetMaxLength(255),
+                      Property("refresh", kPropertyTypeBoolean, false)}),
+        [this](const PropertyList& p) -> ToolResult {
+            auto loaded = QueueLibraryScan(p["refresh"].value<bool>());
+            if (!loaded)
+                return std::unexpected(loaded.error());
+            CJsonUniquePtr result(cJSON_CreateObject()), files(cJSON_CreateArray());
+            if (!result || !files)
+                return std::unexpected("Out of memory");
+            if (*loaded) {
+                cJSON_AddBoolToObject(result.get(), "scanning", true);
+                cJSON_AddNumberToObject(result.get(), "next_offset", 0);
+                if (!cJSON_AddItemToObject(result.get(), "files", files.get()))
+                    return std::unexpected("Out of memory");
+                files.release();
+                return result.release();
+            }
+            cJSON_AddBoolToObject(result.get(), "scanning", false);
+            auto query = p["query"].value<std::string>();
+            int offset = p["offset"].value<int>(), limit = p["limit"].value<int>();
+            std::lock_guard<std::mutex> lock(mutex_);
+            int matching = 0, returned = 0;
+            for (const auto& name : playlist_.Tracks()) {
+                std::string haystack = name, needle = query;
+                for (char& c : haystack)
+                    if (c >= 'A' && c <= 'Z')
+                        c += 32;
+                for (char& c : needle)
+                    if (c >= 'A' && c <= 'Z')
+                        c += 32;
+                if (haystack.find(needle) == std::string::npos)
+                    continue;
+                if (matching++ < offset || returned >= limit)
+                    continue;
+                CJsonUniquePtr item(cJSON_CreateString(name.c_str()));
+                if (!item || !cJSON_AddItemToArray(files.get(), item.get()))
+                    return std::unexpected("Out of memory");
+                item.release();
+                ++returned;
+            }
+            cJSON_AddNumberToObject(result.get(), "total", matching);
+            cJSON_AddNumberToObject(result.get(), "next_offset", offset + returned);
+            cJSON_AddBoolToObject(result.get(), "truncated", truncated_);
+            if (!cJSON_AddItemToObject(result.get(), "files", files.get()))
+                return std::unexpected("Out of memory");
+            files.release();
+            return result.release();
+        });
+    mcp.AddTool(
+        "self.music.play",
+        "Play or replace the selected MP3 using its exact MUSIC basename. Empty "
+        "filename starts selected/first track. Continues through the playlist. Waits for quiet "
+        "conversation audio.",
+        PropertyList({Property("filename", kPropertyTypeString, std::string()).SetMaxLength(255)}),
+        [this](const PropertyList& p) -> ToolResult {
+            auto r = Start(p["filename"].value<std::string>());
+            if (!r)
+                return std::unexpected(r.error());
+            return *r;
+        });
+    mcp.AddTool("self.music.pause", "Pause music and retain the current track and position.",
+                PropertyList(), [this](const PropertyList&) -> ReturnValue {
+                    Pause();
+                    return true;
+                });
+    mcp.AddTool("self.music.resume",
+                "Resume the retained track at its saved position after conversation audio.",
+                PropertyList(), [this](const PropertyList&) -> ToolResult {
+                    auto r = Resume();
+                    if (!r)
+                        return std::unexpected(r.error());
+                    return *r;
+                });
+    mcp.AddTool("self.music.stop", "Stop music and reset the selected track position.",
+                PropertyList(), [this](const PropertyList&) -> ReturnValue {
+                    Stop();
+                    return true;
+                });
+    for (int direction : {-1, 1})
+        mcp.AddTool(direction > 0 ? "self.music.next" : "self.music.previous",
+                    direction > 0 ? "Play the next playlist track."
+                                  : "Restart after 3 seconds, otherwise play the previous track.",
+                    PropertyList(), [this, direction](const PropertyList&) -> ToolResult {
+                        auto r = Skip(direction);
+                        if (!r)
+                            return std::unexpected(r.error());
+                        return *r;
+                    });
+    mcp.AddTool("self.music.seek",
+                "Seek to a position in seconds in the selected MP3; supports VBR. Clamped "
+                "to track duration. Paused tracks stay paused.",
+                PropertyList({Property("seconds", kPropertyTypeInteger, 0, 86400)}),
+                [this](const PropertyList& p) -> ToolResult {
+                    auto r = Seek(uint32_t(p["seconds"].value<int>()) * 1000);
+                    if (!r)
+                        return std::unexpected(r.error());
+                    return *r;
+                });
+    mcp.AddTool("self.music.set_mode",
+                "Set repeat (off/all/one) and shuffle. Both settings persist across restarts.",
+                PropertyList({Property("repeat", kPropertyTypeString).SetMaxLength(3),
+                              Property("shuffle", kPropertyTypeBoolean)}),
+                [this](const PropertyList& p) -> ToolResult {
+                    auto repeat = p["repeat"].value<std::string>();
+                    if (repeat != "off" && repeat != "all" && repeat != "one")
+                        return std::unexpected("Repeat must be off, all or one");
+                    SetMode(repeat == "all" ? box2_music::Repeat::All
+                                            : (repeat == "one" ? box2_music::Repeat::One
+                                                               : box2_music::Repeat::Off),
+                            p["shuffle"].value<bool>());
+                    return true;
+                });
+    mcp.AddTool("self.music.status",
+                "Get phase, metadata, position/duration in milliseconds, playlist index "
+                "(zero based), modes, format and last error.",
+                PropertyList(), [this](const PropertyList&) -> ToolResult {
+                    auto s = Snapshot();
+                    CJsonUniquePtr r(cJSON_CreateObject());
+                    if (!r)
+                        return std::unexpected("Out of memory");
+                    cJSON_AddStringToObject(r.get(), "phase", s.phase.c_str());
+                    cJSON_AddStringToObject(r.get(), "filename", s.filename.c_str());
+                    cJSON_AddStringToObject(r.get(), "title", s.title.c_str());
+                    cJSON_AddStringToObject(r.get(), "artist", s.artist.c_str());
+                    cJSON_AddStringToObject(r.get(), "album", s.album.c_str());
+                    cJSON_AddStringToObject(r.get(), "error", s.error.c_str());
+                    cJSON_AddStringToObject(r.get(), "repeat", s.repeat.c_str());
+                    cJSON_AddBoolToObject(r.get(), "shuffle", s.shuffle);
+                    cJSON_AddBoolToObject(r.get(), "busy", s.busy);
+                    cJSON_AddBoolToObject(r.get(), "library_scanning", s.library_scanning);
+                    cJSON_AddBoolToObject(r.get(), "truncated", s.truncated);
+                    cJSON_AddNumberToObject(r.get(), "position_ms", s.position_ms);
+                    cJSON_AddNumberToObject(r.get(), "duration_ms", s.duration_ms);
+                    cJSON_AddNumberToObject(r.get(), "index", s.index);
+                    cJSON_AddNumberToObject(r.get(), "total", s.total);
+                    cJSON_AddNumberToObject(r.get(), "sample_rate", s.sample_rate);
+                    cJSON_AddNumberToObject(r.get(), "bitrate", s.bitrate);
+                    return r.release();
+                });
+}
+
+bool SdMp3Player::Interrupted(uint32_t revision) const {
+    return cancelled_.load() || revision_.load() != revision || paused_.load() ||
+           Application::GetInstance().GetDeviceState() != kDeviceStateIdle;
+}
+void SdMp3Player::Worker() {
     auto& app = Application::GetInstance();
     auto& audio = app.GetAudioService();
-    do {
-        if (auto ret = Mount(); ret != ESP_OK) {
-            result = std::unexpected(std::string("SD card unavailable: ") + esp_err_to_name(ret));
-            break;
+    uint32_t revision = revision_.load();
+    std::string indexed_file;
+    box2_music::TrackInfo metadata;
+    std::expected<void, std::string> result = LoadLibrary();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (info_.duration_ms && !info_.points.empty()) {
+            metadata = info_;
+            indexed_file = filename_;
         }
-        if (filename.empty()) {
-            auto tracks = ListTracks(0, 1);
-            if (!tracks || tracks->empty()) {
-                result = std::unexpected(tracks ? "No MP3 files in MUSIC" : tracks.error());
+    }
+    bool first = true;
+    while (result && !cancelled_.load()) {
+        std::string filename;
+        uint32_t target;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            revision = revision_.load();
+            if (filename_.empty())
+                filename_ = playlist_.Current();
+            if (!playlist_.Select(filename_)) {
+                result = std::unexpected("Track not in MUSIC library");
                 break;
             }
-            filename = tracks->front();
-            std::lock_guard<std::mutex> lock(mutex_);
-            filename_ = filename;
+            filename = filename_;
+            target = target_ms_;
         }
-
-        // Let the MCP reply and any TTS finish. Auto-listening must end before local playback.
-        int quiet_ticks = 0;
-        for (int ticks = 0; ticks < 600 && !cancelled_.load(); ++ticks) {
+        if (paused_.load())
+            break;  // Retain position, but release decoder/task memory while paused.
+        // Initial requests and requests issued through conversation wait for two seconds of quiet.
+        int quiet = 0;
+        uint32_t token = 0;
+        for (int ticks = 0;
+             ticks < 600 && !cancelled_.load() && revision_.load() == revision && !paused_.load();
+             ++ticks) {
             auto state = app.GetDeviceState();
             if ((state == kDeviceStateIdle || state == kDeviceStateListening) &&
                 audio.IsPlaybackIdle()) {
-                ++quiet_ticks;
-                if (quiet_ticks >= 40) {
-                    if (state == kDeviceStateListening) {
-                        app.StopListening();  // Event-based; handled by the main task.
-                    } else if ((token = audio.BeginPcmPlayback()) != 0) {
+                if (++quiet >= (first ? 40 : 1)) {
+                    if (state == kDeviceStateListening)
+                        app.StopListening();
+                    else if ((token = audio.BeginPcmPlayback()) != 0)
                         break;
-                    }
                 }
             } else {
-                quiet_ticks = 0;
-                if (state != kDeviceStateSpeaking && state != kDeviceStateConnecting) {
+                quiet = 0;
+                if (state != kDeviceStateSpeaking && state != kDeviceStateConnecting)
                     break;
-                }
             }
             vTaskDelay(pdMS_TO_TICKS(50));
         }
-        if (token == 0) {
-            if (!cancelled_.load()) {
+        if (!token) {
+            if (revision_.load() != revision || paused_.load())
+                continue;
+            if (!cancelled_.load())
                 result = std::unexpected("Device did not become ready for music within 30 seconds");
-            }
             break;
         }
-        SetPhase("playing");
-        app.Schedule([filename]() {
-            if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
-                auto& board = Board::GetInstance();
-                board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-                if (auto* display = board.GetDisplay()) {
-                    display->ShowNotification("Playing: " + filename);
-                }
-            }
+        app.Schedule([] {
+            if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle)
+                Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         });
-        ESP_LOGI(kTag, "Playing %s", filename.c_str());
-        result = PlayFile(filename, token);
-        while (result && !ShouldStop() && audio.IsPcmPlaybackPending(token)) {
-            vTaskDelay(pdMS_TO_TICKS(20));
+        first = false;
+        if (indexed_file != filename) {
+            auto path = std::string(kMusicDir) + "/" + filename;
+            std::unique_ptr<FILE, decltype(&fclose)> file(fopen(path.c_str(), "rb"), fclose);
+            if (!file)
+                result = std::unexpected("Cannot open MP3 file");
+            else {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (revision_.load() == revision)
+                        phase_ = "indexing";
+                }
+                auto inspected = box2_music::InspectMp3(
+                    file.get(), [this, revision] { return Interrupted(revision); },
+                    [] { vTaskDelay(1); });
+                if (inspected) {
+                    metadata = std::move(*inspected);
+                    indexed_file = filename;
+                } else if (!Interrupted(revision))
+                    result = std::unexpected(inspected.error());
+            }
         }
-    } while (false);
-    audio.EndPcmPlayback(token, !result || ShouldStop());
+        if (result && !Interrupted(revision)) {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (revision_.load() != revision) {
+                    audio.EndPcmPlayback(token, true);
+                    continue;
+                }
+                info_ = metadata;
+                target = std::min(target, metadata.duration_ms);
+                phase_ = "playing";
+            }
+            result = PlayFile(filename, token, revision, target, metadata);
+            while (result && !Interrupted(revision) && audio.IsPcmPlaybackPending(token))
+                vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        audio.EndPcmPlayback(token, !result || Interrupted(revision));
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (revision_.load() != revision) {
+            first = true;
+            continue;
+        }
+        if (app.GetDeviceState() != kDeviceStateIdle && !cancelled_.load()) {
+            paused_.store(true);
+            target_ms_ = position_ms_;
+            phase_ = "paused";
+            break;
+        }
+        if (!result || cancelled_.load())
+            break;
+        if (paused_.load())
+            continue;
+        position_ms_ = metadata.duration_ms;
+        if (!playlist_.Advance(1, false)) {
+            phase_ = "stopped";
+            target_ms_ = 0;
+            break;
+        }
+        filename_ = playlist_.Current();
+        info_ = {};
+        target_ms_ = position_ms_ = 0;
+        ++revision_;
+    }
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!result) {
+        if (!result && revision_.load() == revision && !cancelled_.load()) {
             error_ = result.error();
             phase_ = "error";
-            ESP_LOGW(kTag, "%s", error_.c_str());
-        } else {
-            phase_ = "stopped";
         }
         busy_.store(false);
+        // A command may arrive as an interrupted worker is exiting. Keep it queued.
+        if (revision_.load() != revision && !cancelled_.load() && !paused_.load() &&
+            phase_ == "waiting")
+            LaunchLocked();
     }
-    auto error = result ? std::string() : result.error();
-    app.Schedule([this, error]() {
-        if (!IsBusy() && Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
-            auto& board = Board::GetInstance();
-            board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-            if (auto* display = board.GetDisplay()) {
-                display->ShowNotification(error.empty() ? "Music stopped" : error.c_str());
-            }
-        }
+    app.Schedule([this] {
+        if (!IsBusy() && Application::GetInstance().GetDeviceState() == kDeviceStateIdle)
+            Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
     });
 }
-
-std::expected<void, std::string> SdMp3Player::PlayFile(const std::string& filename,
-                                                       uint32_t token) {
+std::expected<void, std::string> SdMp3Player::PlayFile(const std::string& filename, uint32_t token,
+                                                       uint32_t revision, uint32_t target,
+                                                       const box2_music::TrackInfo& info) {
     auto path = std::string(kMusicDir) + "/" + filename;
     std::unique_ptr<FILE, decltype(&fclose)> file(fopen(path.c_str(), "rb"), fclose);
     if (!file) {
         return std::unexpected("Cannot open MP3 file");
     }
+    auto point = info.SeekStart(target);
+    if (fseek(file.get(), point.offset, SEEK_SET) != 0)
+        return std::unexpected("Cannot seek MP3 file");
+    uint64_t elapsed_samples = 0;
     auto buffers = std::unique_ptr<DecodeBuffers>(new (std::nothrow) DecodeBuffers);
     if (!buffers) {
         return std::unexpected("Cannot allocate MP3 buffers");
     }
-    // Register only MP3; the simple decoder supplies the MP3 elementary-stream parser.
-    if (esp_mp3_dec_register() != ESP_AUDIO_ERR_OK) {
-        return std::unexpected("Cannot register MP3 decoder");
-    }
     DecoderResources resources;
-    esp_audio_simple_dec_cfg_t config = {};
-    config.dec_type = ESP_AUDIO_SIMPLE_DEC_TYPE_MP3;
-    if (esp_audio_simple_dec_open(&config, &resources.decoder) != ESP_AUDIO_ERR_OK) {
+    if (esp_mp3_dec_open(nullptr, 0, &resources.decoder) != ESP_AUDIO_ERR_OK)
         return std::unexpected("Cannot open MP3 decoder");
-    }
     const auto output_rate = Board::GetInstance().GetAudioCodec()->output_sample_rate();
-    uint32_t source_rate = 0;
-    uint8_t source_channels = 0;
+    if (info.sample_rate != static_cast<uint32_t>(output_rate)) {
+        esp_ae_rate_cvt_cfg_t config = {};
+        config.src_rate = info.sample_rate;
+        config.dest_rate = output_rate;
+        config.channel = 1;
+        config.bits_per_sample = 16;
+        config.complexity = 2;
+        config.perf_type = ESP_AE_RATE_CVT_PERF_TYPE_SPEED;
+        if (esp_ae_rate_cvt_open(&config, &resources.resampler) != ESP_AE_ERR_OK)
+            return std::unexpected("Cannot create music resampler");
+    }
     bool decoded_any = false;
-    bool eos = false;
-    int no_progress = 0;
-    int unconsumed_frames = 0;
-    while (!ShouldStop() && !eos) {
-        size_t bytes = fread(buffers->input.data(), 1, buffers->input.size(), file.get());
-        if (ferror(file.get())) {
+    unsigned frames = 0;
+    while (!Interrupted(revision)) {
+        uint32_t frame_start = (point.sample_offset + elapsed_samples) * 1000 / info.sample_rate;
+        if (frame_start >= info.duration_ms)
+            break;
+        if (fread(buffers->input.data(), 1, 4, file.get()) != 4)
             return std::unexpected("SD card read failed");
-        }
-        eos = bytes < buffers->input.size();
-        esp_audio_simple_dec_raw_t raw = {};
+        auto header = box2_music::ParseMp3Frame(buffers->input.data());
+        if (!header || header->bytes > buffers->input.size() ||
+            header->sample_rate != info.sample_rate || header->channels != info.channels)
+            return std::unexpected("MP3 changed since indexing; refresh library");
+        if (fread(buffers->input.data() + 4, 1, header->bytes - 4, file.get()) !=
+            size_t(header->bytes - 4))
+            return std::unexpected("Truncated MP3 frame");
+        elapsed_samples += header->samples;
+        uint32_t frame_end = (point.sample_offset + elapsed_samples) * 1000 / info.sample_rate;
+        esp_audio_dec_in_raw_t raw = {};
         raw.buffer = buffers->input.data();
-        raw.len = bytes;
-        raw.eos = eos;
-        // Also feed a zero-byte EOS when file size is an exact multiple of the read size.
-        do {
-            if (ShouldStop()) {
-                return {};
+        raw.len = header->bytes;
+        esp_audio_dec_out_frame_t frame = {};
+        frame.buffer = reinterpret_cast<uint8_t*>(buffers->decoded.data());
+        frame.len = buffers->decoded.size() * sizeof(int16_t);
+        esp_audio_dec_info_t decoded = {};
+        auto ret = esp_mp3_dec_decode(resources.decoder, &raw, &frame, &decoded);
+        // A seek starts without earlier bit-reservoir data. Only tolerate initial
+        // reservoir underflow in the discarded preroll, never in audible frames.
+        if (ret == ESP_AUDIO_ERR_FAIL && point.offset != info.points.front().offset &&
+            frames < 10 && frame_end <= target) {
+            ++frames;
+            continue;
+        }
+        ++frames;
+        if (ret != ESP_AUDIO_ERR_OK || raw.consumed != raw.len || frame.decoded_size > frame.len)
+            return std::unexpected("Invalid or unsupported MP3 stream");
+        if (!frame.decoded_size) {
+            if (frames > 10)
+                return std::unexpected("MP3 decoder made no progress");
+            continue;
+        }
+        if (decoded.bits_per_sample != 16 || decoded.channel != info.channels ||
+            decoded.sample_rate != info.sample_rate ||
+            frame.decoded_size % (decoded.channel * sizeof(int16_t)) != 0)
+            return std::unexpected("Unsupported MP3 audio format");
+        uint32_t count = frame.decoded_size / (sizeof(int16_t) * decoded.channel);
+        if (count > buffers->mono.size())
+            return std::unexpected("MP3 frame exceeds buffer capacity");
+        for (size_t i = 0; i < count; ++i)
+            buffers->mono[i] = decoded.channel == 1
+                                   ? buffers->decoded[i]
+                                   : box2_music::StereoToMono(buffers->decoded[2 * i],
+                                                              buffers->decoded[2 * i + 1]);
+        int16_t* pcm = buffers->mono.data();
+        if (resources.resampler) {
+            uint32_t capacity = 0;
+            if (esp_ae_rate_cvt_get_max_out_sample_num(resources.resampler, count, &capacity) !=
+                    ESP_AE_ERR_OK ||
+                capacity > buffers->resampled.size())
+                return std::unexpected("Resampled frame exceeds buffer capacity");
+            if (esp_ae_rate_cvt_process(resources.resampler, pcm, count, buffers->resampled.data(),
+                                        &capacity) != ESP_AE_ERR_OK)
+                return std::unexpected("MP3 resampling failed");
+            pcm = buffers->resampled.data();
+            count = capacity;
+        }
+        decoded_any = true;
+        if (frame_end > target) {
+            uint32_t offset =
+                target > frame_start
+                    ? std::min<uint32_t>(count, uint64_t(target - frame_start) * output_rate / 1000)
+                    : 0;
+            while (offset < count && !Interrupted(revision)) {
+                auto chunk = std::min<uint32_t>(480, count - offset);
+                auto queued = Application::GetInstance().GetAudioService().QueuePcm(
+                    token, pcm + offset, chunk);
+                if (queued == ESP_ERR_TIMEOUT)
+                    continue;
+                if (queued == ESP_ERR_INVALID_STATE) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (revision_.load() == revision) {
+                        paused_.store(true);
+                        target_ms_ = position_ms_;
+                        phase_ = "paused";
+                    }
+                    return {};
+                }
+                if (queued != ESP_OK)
+                    return std::unexpected("Cannot queue music audio");
+                offset += chunk;
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (revision_.load() == revision)
+                    position_ms_ = std::min<uint32_t>(
+                        info.duration_ms, frame_start + uint64_t(offset) * 1000 / output_rate);
             }
-            esp_audio_simple_dec_out_t frame = {};
-            frame.buffer = reinterpret_cast<uint8_t*>(buffers->decoded.data());
-            frame.len = buffers->decoded.size() * sizeof(int16_t);
-            auto ret = esp_audio_simple_dec_process(resources.decoder, &raw, &frame);
-            if (ret != ESP_AUDIO_ERR_OK || raw.consumed > raw.len ||
-                frame.decoded_size > frame.len) {
-                return std::unexpected("Invalid or unsupported MP3 stream");
-            }
-            if (raw.consumed == 0 && frame.decoded_size == 0) {
-                if (raw.len != 0 || ++no_progress > 4) {
-                    return std::unexpected("MP3 decoder made no progress");
-                }
-            } else {
-                no_progress = 0;
-            }
-            if (raw.consumed == 0 && raw.len != 0) {
-                if (++unconsumed_frames > 64) {
-                    return std::unexpected("MP3 decoder stalled on input");
-                }
-            } else {
-                unconsumed_frames = 0;
-            }
-            if (frame.decoded_size != 0) {
-                esp_audio_simple_dec_info_t info = {};
-                if (esp_audio_simple_dec_get_info(resources.decoder, &info) != ESP_AUDIO_ERR_OK ||
-                    info.bits_per_sample != 16 || (info.channel != 1 && info.channel != 2) ||
-                    info.sample_rate < 8000 || info.sample_rate > 48000 ||
-                    frame.decoded_size % (info.channel * sizeof(int16_t)) != 0) {
-                    return std::unexpected("Unsupported MP3 audio format");
-                }
-                if (source_rate == 0) {
-                    source_rate = info.sample_rate;
-                    source_channels = info.channel;
-                    if (source_rate != static_cast<uint32_t>(output_rate)) {
-                        esp_ae_rate_cvt_cfg_t rate_config = {};
-                        rate_config.src_rate = source_rate;
-                        rate_config.dest_rate = output_rate;
-                        rate_config.channel = 1;
-                        rate_config.bits_per_sample = 16;
-                        rate_config.complexity = 2;
-                        rate_config.perf_type = ESP_AE_RATE_CVT_PERF_TYPE_SPEED;
-                        if (esp_ae_rate_cvt_open(&rate_config, &resources.resampler) !=
-                            ESP_AE_ERR_OK) {
-                            return std::unexpected("Cannot create music resampler");
-                        }
-                    }
-                } else if (source_rate != info.sample_rate || source_channels != info.channel) {
-                    return std::unexpected("MP3 format changed mid-stream");
-                }
-                uint32_t count = frame.decoded_size / (sizeof(int16_t) * info.channel);
-                if (count > buffers->mono.size()) {
-                    return std::unexpected("MP3 frame exceeds buffer capacity");
-                }
-                for (size_t i = 0; i < count; ++i) {
-                    buffers->mono[i] = info.channel == 1
-                                           ? buffers->decoded[i]
-                                           : box2_music::StereoToMono(buffers->decoded[2 * i],
-                                                                      buffers->decoded[2 * i + 1]);
-                }
-                int16_t* pcm = buffers->mono.data();
-                if (resources.resampler) {
-                    uint32_t capacity = 0;
-                    if (esp_ae_rate_cvt_get_max_out_sample_num(resources.resampler, count,
-                                                               &capacity) != ESP_AE_ERR_OK ||
-                        capacity > buffers->resampled.size()) {
-                        return std::unexpected("Resampled frame exceeds buffer capacity");
-                    }
-                    if (esp_ae_rate_cvt_process(resources.resampler, pcm, count,
-                                                buffers->resampled.data(),
-                                                &capacity) != ESP_AE_ERR_OK) {
-                        return std::unexpected("MP3 resampling failed");
-                    }
-                    pcm = buffers->resampled.data();
-                    count = capacity;
-                }
-                for (uint32_t offset = 0; offset < count && !ShouldStop();) {
-                    auto chunk = std::min<uint32_t>(480, count - offset);
-                    auto queued = Application::GetInstance().GetAudioService().QueuePcm(
-                        token, pcm + offset, chunk);
-                    if (queued == ESP_ERR_TIMEOUT) {
-                        continue;
-                    }
-                    if (queued == ESP_ERR_INVALID_STATE) {
-                        return {};  // A higher-priority audio producer interrupted music.
-                    }
-                    if (queued != ESP_OK) {
-                        return std::unexpected("Cannot queue music audio");
-                    }
-                    offset += chunk;
-                }
-                decoded_any = true;
-            }
-            raw.buffer += raw.consumed;
-            raw.len -= raw.consumed;
-        } while (raw.len != 0);
-        vTaskDelay(1);  // Yield even for corrupt streams or large metadata tags.
+        }
+        if (frames % 8 == 0)
+            vTaskDelay(1);  // Yield during preroll, including zero-volume playback.
     }
-    if (!decoded_any && !ShouldStop()) {
+    if (!decoded_any && target < info.duration_ms && !Interrupted(revision))
         return std::unexpected("File contained no MP3 audio");
-    }
     return {};
 }

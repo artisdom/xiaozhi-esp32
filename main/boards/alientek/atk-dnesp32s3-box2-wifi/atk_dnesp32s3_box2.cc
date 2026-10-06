@@ -5,6 +5,7 @@
 #include "config.h"
 #include "display/lcd_display.h"
 #include "led/single_led.h"
+#include "music_display.h"
 #include "power_manager.h"
 #include "power_save_timer.h"
 #include "sd_mp3_player.h"
@@ -24,7 +25,7 @@
 class atk_dnesp32s3_box2_wifi : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
-    LcdDisplay* display_;
+    MusicDisplay* display_;
     esp_io_expander_handle_t io_exp_handle;
     button_handle_t btns;
     button_driver_t* btn_driver_ = nullptr;
@@ -38,6 +39,7 @@ private:
     int ticks_ = 0;
     const int kChgCtrlInterval = 5;
     SdMp3Player music_player_;
+    bool music_view_ = false;
 
     void InitializeBoardPowerManager() {
         instance_ = this;
@@ -54,6 +56,21 @@ private:
                     atk_dnesp32s3_box2_wifi* self = static_cast<atk_dnesp32s3_box2_wifi*>(arg);
 
                     self->ticks_++;
+                    if (self->ticks_ % 10 == 0) {
+                        Application::GetInstance().Schedule([self]() {
+                            auto state = self->music_player_.Snapshot();
+                            bool idle =
+                                Application::GetInstance().GetDeviceState() == kDeviceStateIdle;
+                            if (state.busy && state.phase != "paused")
+                                self->power_save_timer_->WakeUp();
+                            self->display_->UpdateMusic(
+                                state,
+                                idle && (self->music_view_ || state.phase == "playing" ||
+                                         state.phase == "indexing" || state.phase == "waiting" ||
+                                         state.phase == "paused"),
+                                self->GetAudioCodec()->output_volume());
+                        });
+                    }
                     if (self->ticks_ % self->kChgCtrlInterval == 0) {
                         if (self->IoExpanderGetLevel(XIO_CHRG) == 0) {
                             self->power_status_ = kDeviceTypecSupply;
@@ -199,6 +216,16 @@ private:
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
     }
 
+    void SkipMusic(int direction) {
+        Application::GetInstance().Schedule([this, direction]() {
+            power_save_timer_->WakeUp();
+            music_view_ = true;
+            auto result = music_player_.Skip(direction);
+            if (!result)
+                GetDisplay()->ShowNotification(result.error());
+        });
+    }
+
     void InitializeButtons() {
         instance_ = this;
 
@@ -236,7 +263,7 @@ private:
         ESP_ERROR_CHECK(iot_button_new_gpio_device(&r_btn_cfg, &r_cfg, &r_btn_handle));
 
         iot_button_register_cb(
-            l_btn_handle, BUTTON_PRESS_DOWN, nullptr,
+            l_btn_handle, BUTTON_SINGLE_CLICK, nullptr,
             [](void* button_handle, void* usr_data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
                 self->power_save_timer_->WakeUp();
@@ -257,10 +284,23 @@ private:
             m_btn_handle, BUTTON_SINGLE_CLICK, nullptr,
             [](void* button_handle, void* usr_data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
-                self->power_save_timer_->WakeUp();
-                self->music_player_.Stop();
-                auto& app = Application::GetInstance();
-                app.ToggleChatState();
+                Application::GetInstance().Schedule([self]() {
+                    self->power_save_timer_->WakeUp();
+                    auto state = self->music_player_.Snapshot();
+                    if (self->music_view_ || state.busy || state.phase == "paused") {
+                        self->music_view_ = true;
+                        if (state.phase == "playing" || state.phase == "waiting" ||
+                            state.phase == "indexing")
+                            self->music_player_.Pause();
+                        else {
+                            auto result = state.filename.empty() ? self->music_player_.Start()
+                                                                 : self->music_player_.Resume();
+                            if (!result)
+                                self->GetDisplay()->ShowNotification(result.error());
+                        }
+                    } else
+                        Application::GetInstance().ToggleChatState();
+                });
             },
             this);
 
@@ -270,15 +310,35 @@ private:
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
                 Application::GetInstance().Schedule([self]() {
                     self->power_save_timer_->WakeUp();
-                    if (self->music_player_.IsBusy()) {
+                    auto state = self->music_player_.Snapshot();
+                    if (self->music_view_ || state.busy || state.phase == "paused") {
                         self->music_player_.Stop();
-                        self->GetDisplay()->ShowNotification("Music stopped");
+                        self->music_view_ = false;
+                        self->display_->UpdateMusic(self->music_player_.Snapshot(), false,
+                                                    self->GetAudioCodec()->output_volume());
                     } else {
-                        auto result = self->music_player_.Start();
-                        self->GetDisplay()->ShowNotification(result ? result->c_str()
-                                                                    : result.error().c_str());
+                        self->music_view_ = true;
+                        auto result = state.filename.empty() ? self->music_player_.Start()
+                                                             : self->music_player_.Resume();
+                        if (!result)
+                            self->GetDisplay()->ShowNotification(result.error());
                     }
                 });
+            },
+            this);
+
+        iot_button_register_cb(
+            l_btn_handle, BUTTON_DOUBLE_CLICK, nullptr,
+            [](void*, void* data) {
+                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(data);
+                self->SkipMusic(-1);
+            },
+            this);
+        iot_button_register_cb(
+            r_btn_handle, BUTTON_DOUBLE_CLICK, nullptr,
+            [](void*, void* data) {
+                auto self = static_cast<atk_dnesp32s3_box2_wifi*>(data);
+                self->SkipMusic(1);
             },
             this);
 
@@ -307,7 +367,7 @@ private:
             this);
 
         iot_button_register_cb(
-            r_btn_handle, BUTTON_PRESS_DOWN, nullptr,
+            r_btn_handle, BUTTON_SINGLE_CLICK, nullptr,
             [](void* button_handle, void* usr_data) {
                 auto self = static_cast<atk_dnesp32s3_box2_wifi*>(usr_data);
                 self->power_save_timer_->WakeUp();
@@ -429,9 +489,9 @@ private:
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-        display_ = new SpiLcdDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
-                                     DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
-                                     DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+        display_ =
+            new MusicDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X,
+                             DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
 public:
